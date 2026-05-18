@@ -6,23 +6,60 @@ import {
   createGalleryImage,
   isSupabaseConfigured,
   loadStoredImages,
-  saveStoredImages,
+  removeStoredImage,
+  revokeImageUrl,
 } from "./lib/galleryStorage";
 import { createSampleImages } from "./lib/sampleArt";
 import type { GalleryImage } from "./types";
 
 function App() {
-  const [images, setImages] = useState<GalleryImage[]>(() => loadStoredImages());
+  const [images, setImages] = useState<GalleryImage[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const imagesRef = useRef<GalleryImage[]>([]);
   const samples = useMemo(() => createSampleImages(), []);
   const sceneImages = images.length > 0 ? images : samples;
   const supabaseReady = isSupabaseConfigured();
 
   useEffect(() => {
-    saveStoredImages(images);
+    let isMounted = true;
+
+    void loadStoredImages()
+      .then((storedImages) => {
+        if (isMounted) {
+          setImages(storedImages);
+        } else {
+          storedImages.forEach(revokeImageUrl);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setMessage("读取本地画廊失败");
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoading(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    imagesRef.current = images;
   }, [images]);
+
+  useEffect(
+    () => () => {
+      imagesRef.current.forEach(revokeImageUrl);
+    },
+    [],
+  );
 
   async function handleFiles(files: FileList | null) {
     const fileArray = Array.from(files ?? []).filter((file) =>
@@ -54,12 +91,19 @@ function App() {
     }
   }
 
-  function removeImage(id: string) {
-    setImages((current) => current.filter((image) => image.id !== id));
+  async function removeImage(id: string) {
+    const image = images.find((item) => item.id === id);
+    setImages((current) => current.filter((item) => item.id !== id));
+    if (image) {
+      revokeImageUrl(image);
+    }
+    await removeStoredImage(id);
   }
 
-  function resetGallery() {
-    clearStoredImages();
+  async function resetGallery() {
+    const previousImages = images;
+    await clearStoredImages();
+    previousImages.forEach(revokeImageUrl);
     setImages([]);
     setMessage("已恢复示例画廊");
   }
@@ -93,9 +137,9 @@ function App() {
             onChange={(event) => void handleFiles(event.target.files)}
           />
           <span className="upload-icon" aria-hidden="true">
-            {isUploading ? <Loader2 size={28} /> : <ImagePlus size={28} />}
+            {isUploading || isLoading ? <Loader2 size={28} /> : <ImagePlus size={28} />}
           </span>
-          <span>{isUploading ? "上传中" : "添加照片"}</span>
+          <span>{isLoading ? "载入中" : isUploading ? "上传中" : "添加照片"}</span>
         </label>
 
         <div className="button-row">
@@ -111,7 +155,7 @@ function App() {
           <button
             type="button"
             className="icon-button"
-            onClick={resetGallery}
+            onClick={() => void resetGallery()}
             title="恢复示例"
           >
             <RotateCcw size={18} />
@@ -147,7 +191,7 @@ function App() {
                 <button
                   type="button"
                   className="delete-button"
-                  onClick={() => removeImage(image.id)}
+                  onClick={() => void removeImage(image.id)}
                   title="移除"
                 >
                   <Trash2 size={16} />
