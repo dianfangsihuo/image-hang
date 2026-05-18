@@ -5,6 +5,7 @@ import {
   Maximize2,
   Move,
   Pencil,
+  Plus,
   RotateCcw,
   Ruler,
   Trash2,
@@ -23,20 +24,25 @@ import {
 import {
   clearStoredLayouts,
   clearStoredRoomConfig,
+  clearStoredCustomWalls,
   defaultRoomConfig,
+  loadStoredCustomWalls,
   loadStoredLayouts,
   loadStoredRoomConfig,
+  saveStoredCustomWalls,
   saveStoredLayouts,
   saveStoredRoomConfig,
 } from "./lib/layoutStorage";
 import { createSampleImages } from "./lib/sampleArt";
 import type {
   AppMode,
+  GalleryCustomWall,
   GalleryFrameLayout,
   GalleryImage,
   GalleryLayouts,
   GalleryRoomConfig,
   GalleryWall,
+  GalleryWallTarget,
 } from "./types";
 
 const wallLabels: Record<GalleryWall, string> = {
@@ -46,18 +52,61 @@ const wallLabels: Record<GalleryWall, string> = {
   east: "右墙",
 };
 
-const wallOptions = Object.entries(wallLabels) as Array<[GalleryWall, string]>;
+const builtWallOptions = Object.entries(wallLabels) as Array<[GalleryWall, string]>;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function parseBuiltWallTarget(target: GalleryWallTarget) {
+  if (target === "north" || target === "south" || target === "west" || target === "east") {
+    return { roomIndex: 0, wall: target as GalleryWall };
+  }
+
+  const match = String(target).match(/^room-(\d+):(north|south|west|east)$/);
+  if (!match) {
+    return null;
+  }
+
+  return { roomIndex: Number(match[1]), wall: match[2] as GalleryWall };
+}
+
+function builtWallTarget(roomIndex: number, wall: GalleryWall): GalleryWallTarget {
+  return roomIndex === 0 ? wall : `room-${roomIndex}:${wall}`;
 }
 
 function getWallLength(room: GalleryRoomConfig, wall: GalleryWall) {
   return wall === "north" || wall === "south" ? room.width : room.depth;
 }
 
-function getWallOffsetLimit(room: GalleryRoomConfig, wall: GalleryWall) {
-  return Math.max(2.2, getWallLength(room, wall) / 2 - 1.8);
+function getWallTargetLength(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  target: GalleryWallTarget,
+) {
+  const built = parseBuiltWallTarget(target);
+
+  if (built) {
+    return getWallLength(room, built.wall);
+  }
+
+  return customWalls.find((wall) => wall.id === target)?.length ?? room.width;
+}
+
+function getWallTargetHeight(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  target: GalleryWallTarget,
+) {
+  return customWalls.find((wall) => wall.id === target)?.height ?? room.height;
+}
+
+function getWallOffsetLimit(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  target: GalleryWallTarget,
+) {
+  return Math.max(2.2, getWallTargetLength(room, customWalls, target) / 2 - 1.8);
 }
 
 function getDefaultFrameWidth(image: GalleryImage) {
@@ -67,6 +116,7 @@ function getDefaultFrameWidth(image: GalleryImage) {
 
 function calculateGalleryCapacity(
   room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
   images: GalleryImage[],
   layouts: GalleryLayouts,
 ) {
@@ -88,8 +138,13 @@ function calculateGalleryCapacity(
   const usableHeight = Math.max(0, room.height - 1.4 - 0.85);
   const rows = Math.max(1, Math.floor((usableHeight + verticalGap) / (averageHeight + verticalGap)));
 
-  return wallOptions.reduce((total, [wall]) => {
-    const usableLength = Math.max(0, getWallLength(room, wall) - 2.4);
+  const builtinTargets = Array.from({ length: room.roomCount }, (_, roomIndex) =>
+    builtWallOptions.map(([wall]) => builtWallTarget(roomIndex, wall)),
+  ).flat();
+  const allTargets = [...builtinTargets, ...customWalls.map((wall) => wall.id)];
+
+  return allTargets.reduce((total, target) => {
+    const usableLength = Math.max(0, getWallTargetLength(room, customWalls, target) - 2.4);
     const columns = Math.max(
       0,
       Math.floor((usableLength + horizontalGap) / (averageWidth + horizontalGap)),
@@ -103,6 +158,11 @@ function App() {
   const [images, setImages] = useState<GalleryImage[]>([]);
   const [layouts, setLayouts] = useState<GalleryLayouts>(() => loadStoredLayouts());
   const [roomConfig, setRoomConfig] = useState<GalleryRoomConfig>(() => loadStoredRoomConfig());
+  const [customWalls, setCustomWalls] = useState<GalleryCustomWall[]>(() =>
+    loadStoredCustomWalls(),
+  );
+  const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
+  const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -112,6 +172,9 @@ function App() {
   const imagesRef = useRef<GalleryImage[]>([]);
   const samples = useMemo(() => createSampleImages(), []);
   const sceneImages = images.length > 0 ? images : samples;
+  const placedSceneImages = sceneImages.filter(
+    (image) => !pendingPlacementIds.includes(image.id) || layouts[image.id],
+  );
   const selectedIndex = sceneImages.findIndex((image) => image.id === selectedImageId);
   const selectedImage = selectedIndex >= 0 ? sceneImages[selectedIndex] : sceneImages[0];
   const selectedLayout =
@@ -119,8 +182,8 @@ function App() {
     (layouts[selectedImage.id] ??
       getDefaultLayout(selectedImage, Math.max(selectedIndex, 0), roomConfig));
   const capacity = useMemo(
-    () => calculateGalleryCapacity(roomConfig, sceneImages, layouts),
-    [layouts, roomConfig, sceneImages],
+    () => calculateGalleryCapacity(roomConfig, customWalls, sceneImages, layouts),
+    [customWalls, layouts, roomConfig, sceneImages],
   );
   const remainingCapacity = Math.max(0, capacity - sceneImages.length);
   const supabaseReady = isSupabaseConfigured();
@@ -165,6 +228,10 @@ function App() {
   }, [roomConfig]);
 
   useEffect(() => {
+    saveStoredCustomWalls(customWalls);
+  }, [customWalls]);
+
+  useEffect(() => {
     if (mode !== "edit") {
       return;
     }
@@ -200,7 +267,13 @@ function App() {
       setImages((current) => [...uploadedImages, ...current]);
       setSelectedImageId(uploadedImages[0]?.id ?? null);
       const warning = results.find((result) => result.warning)?.warning;
-      setMessage(warning ?? `已添加 ${results.length} 张图片`);
+
+      if (mode === "edit") {
+        setPendingPlacementIds((current) => [...current, ...uploadedImages.map((image) => image.id)]);
+        setMessage(warning ?? `已导入 ${results.length} 张图片，请点击墙面指定挂画位置`);
+      } else {
+        setMessage(warning ?? `已添加 ${results.length} 张图片`);
+      }
     } catch (error) {
       const fallback =
         error instanceof Error ? error.message : "图片处理失败，请换一张图片试试";
@@ -232,10 +305,13 @@ function App() {
     await clearStoredImages();
     clearStoredLayouts();
     clearStoredRoomConfig();
+    clearStoredCustomWalls();
     previousImages.forEach(revokeImageUrl);
     setImages([]);
     setLayouts({});
     setRoomConfig(defaultRoomConfig);
+    setCustomWalls([]);
+    setPendingPlacementIds([]);
     setSelectedImageId(null);
     setMessage("已恢复示例画廊");
   }
@@ -246,7 +322,8 @@ function App() {
     }
 
     const wall = patch.wall ?? selectedLayout.wall;
-    const limit = getWallOffsetLimit(roomConfig, wall);
+    const limit = getWallOffsetLimit(roomConfig, customWalls, wall);
+    const wallHeight = getWallTargetHeight(roomConfig, customWalls, wall);
 
     setLayouts((current) => ({
       ...current,
@@ -255,7 +332,7 @@ function App() {
         ...patch,
         wall,
         offset: clamp(patch.offset ?? selectedLayout.offset, -limit, limit),
-        height: clamp(patch.height ?? selectedLayout.height, 1.1, roomConfig.height - 1.15),
+        height: clamp(patch.height ?? selectedLayout.height, 1.1, wallHeight - 1.15),
         width: clamp(patch.width ?? selectedLayout.width, 1.2, 5),
       },
     }));
@@ -267,19 +344,21 @@ function App() {
         width: clamp(patch.width ?? current.width, 12, 36),
         depth: clamp(patch.depth ?? current.depth, 14, 44),
         height: clamp(patch.height ?? current.height, 4.2, 8),
+        roomCount: Math.round(clamp(patch.roomCount ?? current.roomCount, 1, 5)),
       };
 
       setLayouts((currentLayouts) =>
         Object.fromEntries(
           Object.entries(currentLayouts).map(([id, layout]) => {
-            const limit = getWallOffsetLimit(next, layout.wall);
+            const limit = getWallOffsetLimit(next, customWalls, layout.wall);
+            const wallHeight = getWallTargetHeight(next, customWalls, layout.wall);
 
             return [
               id,
               {
                 ...layout,
                 offset: clamp(layout.offset, -limit, limit),
-                height: clamp(layout.height, 1.1, next.height - 1.15),
+                height: clamp(layout.height, 1.1, wallHeight - 1.15),
               },
             ];
           }),
@@ -290,16 +369,104 @@ function App() {
     });
   }
 
+  function getWallOptions() {
+    const builtin = Array.from({ length: roomConfig.roomCount }, (_, roomIndex) =>
+      builtWallOptions.map(([wall, label]) => [
+        builtWallTarget(roomIndex, wall),
+        roomIndex === 0 ? label : `房间 ${roomIndex + 1} ${label}`,
+      ] as [GalleryWallTarget, string]),
+    ).flat();
+
+    return [
+      ...builtin,
+      ...customWalls.map((wall) => [wall.id, `${wall.name}`] as [GalleryWallTarget, string]),
+    ];
+  }
+
+  function addRoom() {
+    updateRoomConfig({ roomCount: roomConfig.roomCount + 1 });
+    setMessage(`已新增房间 ${roomConfig.roomCount + 1}`);
+  }
+
+  function addCustomWall() {
+    const roomIndex = Math.max(0, roomConfig.roomCount - 1);
+    const wall: GalleryCustomWall = {
+      id: `wall-${crypto.randomUUID()}`,
+      name: `自定义墙 ${customWalls.length + 1}`,
+      roomIndex,
+      x: 0,
+      z: 0,
+      length: Math.min(7, roomConfig.width - 2),
+      height: Math.min(roomConfig.height - 0.3, 4.8),
+      rotation: 0,
+    };
+
+    setCustomWalls((current) => [...current, wall]);
+    setSelectedWallId(wall.id);
+    setMessage(`已新增 ${wall.name}`);
+  }
+
+  function updateCustomWall(id: string, patch: Partial<GalleryCustomWall>) {
+    setCustomWalls((current) =>
+      current.map((wall) =>
+        wall.id === id
+          ? {
+              ...wall,
+              ...patch,
+              roomIndex: Math.round(clamp(patch.roomIndex ?? wall.roomIndex, 0, roomConfig.roomCount - 1)),
+              x: clamp(patch.x ?? wall.x, -roomConfig.width / 2 + 1, roomConfig.width / 2 - 1),
+              z: clamp(patch.z ?? wall.z, -roomConfig.depth / 2 + 1, roomConfig.depth / 2 - 1),
+              length: clamp(patch.length ?? wall.length, 2, roomConfig.width - 1),
+              height: clamp(patch.height ?? wall.height, 2.2, roomConfig.height - 0.35),
+              rotation: patch.rotation ?? wall.rotation,
+            }
+          : wall,
+      ),
+    );
+  }
+
+  function placePendingImage(wall: GalleryWallTarget, offset: number, height: number) {
+    const imageId = pendingPlacementIds[0];
+
+    if (!imageId) {
+      return;
+    }
+
+    const image = images.find((item) => item.id === imageId);
+    if (!image) {
+      return;
+    }
+
+    setLayouts((current) => ({
+      ...current,
+      [imageId]: {
+        wall,
+        offset: clamp(offset, -getWallOffsetLimit(roomConfig, customWalls, wall), getWallOffsetLimit(roomConfig, customWalls, wall)),
+        height: clamp(height, 1.1, getWallTargetHeight(roomConfig, customWalls, wall) - 1.15),
+        width: getDefaultFrameWidth(image),
+      },
+    }));
+    setPendingPlacementIds((current) => current.slice(1));
+    setSelectedImageId(imageId);
+    setMessage(pendingPlacementIds.length > 1 ? "已放置图片，请继续点击墙面" : "图片已挂到墙面");
+  }
+
+  const wallOptions = getWallOptions();
+  const selectedWall = customWalls.find((wall) => wall.id === selectedWallId) ?? customWalls[0];
+
   return (
     <main className="app-shell">
       <section className="gallery-stage" aria-label="3D gallery viewport">
         <GalleryScene
-          images={sceneImages}
+          images={placedSceneImages}
           layouts={layouts}
           roomConfig={roomConfig}
+          customWalls={customWalls}
           mode={mode}
+          pendingPlacementImageId={pendingPlacementIds[0] ?? null}
           selectedImageId={selectedImageId}
           onSelectImage={setSelectedImageId}
+          onPlaceImageOnWall={placePendingImage}
         />
         {mode === "view" ? (
           <button className="enter-button" type="button">
@@ -313,7 +480,7 @@ function App() {
         )}
       </section>
 
-      <aside className="control-panel" aria-label="Gallery controls">
+      <aside className={`control-panel ${mode}-panel`} aria-label="Gallery controls">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Image Hang</p>
@@ -323,6 +490,21 @@ function App() {
             {supabaseReady ? "Supabase" : "Local"}
           </span>
         </div>
+
+        {mode === "view" ? (
+          <section className="view-console" aria-label="Viewing console">
+            <strong>观赏模式</strong>
+            <span>点击左下角或画布进入画廊视角</span>
+            <div>
+              <b>{placedSceneImages.length}</b>
+              <small>已展览</small>
+            </div>
+            <div>
+              <b>{roomConfig.roomCount}</b>
+              <small>房间</small>
+            </div>
+          </section>
+        ) : null}
 
         <div className="mode-switch" aria-label="Mode switch">
           <button
@@ -407,8 +589,8 @@ function App() {
               <span>横向位置 {selectedLayout.offset.toFixed(1)}</span>
               <input
                 type="range"
-                min={-getWallOffsetLimit(roomConfig, selectedLayout.wall)}
-                max={getWallOffsetLimit(roomConfig, selectedLayout.wall)}
+                min={-getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
+                max={getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
                 step="0.1"
                 value={selectedLayout.offset}
                 onChange={(event) =>
@@ -422,7 +604,10 @@ function App() {
               <input
                 type="range"
                 min="1.1"
-                max={Math.max(1.2, roomConfig.height - 1.15)}
+                max={Math.max(
+                  1.2,
+                  getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) - 1.15,
+                )}
                 step="0.1"
                 value={selectedLayout.height}
                 onChange={(event) =>
@@ -475,6 +660,21 @@ function App() {
               <small>剩余 {remainingCapacity} 张</small>
             </div>
 
+            <div className="button-row">
+              <button type="button" className="tool-button secondary" onClick={addRoom}>
+                <Plus size={17} />
+                <span>新增房间</span>
+              </button>
+              <button type="button" className="tool-button secondary" onClick={addCustomWall}>
+                <Plus size={17} />
+                <span>新增墙壁</span>
+              </button>
+            </div>
+
+            {pendingPlacementIds.length > 0 ? (
+              <p className="placement-note">待放置 {pendingPlacementIds.length} 张：点击任意墙面挂画</p>
+            ) : null}
+
             <label className="field">
               <span>宽度 {roomConfig.width.toFixed(1)}</span>
               <input
@@ -500,6 +700,18 @@ function App() {
             </label>
 
             <label className="field">
+              <span>房间数 {roomConfig.roomCount}</span>
+              <input
+                type="range"
+                min="1"
+                max="5"
+                step="1"
+                value={roomConfig.roomCount}
+                onChange={(event) => updateRoomConfig({ roomCount: Number(event.target.value) })}
+              />
+            </label>
+
+            <label className="field">
               <span>层高 {roomConfig.height.toFixed(1)}</span>
               <input
                 type="range"
@@ -508,6 +720,99 @@ function App() {
                 step="0.1"
                 value={roomConfig.height}
                 onChange={(event) => updateRoomConfig({ height: Number(event.target.value) })}
+              />
+            </label>
+          </section>
+        ) : null}
+
+        {mode === "edit" && customWalls.length > 0 && selectedWall ? (
+          <section className="editor-panel" aria-label="Wall editor">
+            <div className="editor-heading">
+              <Ruler size={17} />
+              <span>{selectedWall.name}</span>
+            </div>
+
+            <label className="field">
+              <span>墙壁</span>
+              <select
+                value={selectedWall.id}
+                onChange={(event) => setSelectedWallId(event.target.value)}
+              >
+                {customWalls.map((wall) => (
+                  <option key={wall.id} value={wall.id}>
+                    {wall.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span>所属房间 {selectedWall.roomIndex + 1}</span>
+              <input
+                type="range"
+                min="0"
+                max={roomConfig.roomCount - 1}
+                step="1"
+                value={selectedWall.roomIndex}
+                onChange={(event) =>
+                  updateCustomWall(selectedWall.id, { roomIndex: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>X {selectedWall.x.toFixed(1)}</span>
+              <input
+                type="range"
+                min={-roomConfig.width / 2 + 1}
+                max={roomConfig.width / 2 - 1}
+                step="0.1"
+                value={selectedWall.x}
+                onChange={(event) =>
+                  updateCustomWall(selectedWall.id, { x: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>Z {selectedWall.z.toFixed(1)}</span>
+              <input
+                type="range"
+                min={-roomConfig.depth / 2 + 1}
+                max={roomConfig.depth / 2 - 1}
+                step="0.1"
+                value={selectedWall.z}
+                onChange={(event) =>
+                  updateCustomWall(selectedWall.id, { z: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>长度 {selectedWall.length.toFixed(1)}</span>
+              <input
+                type="range"
+                min="2"
+                max={roomConfig.width - 1}
+                step="0.1"
+                value={selectedWall.length}
+                onChange={(event) =>
+                  updateCustomWall(selectedWall.id, { length: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>旋转 {Math.round((selectedWall.rotation * 180) / Math.PI)}°</span>
+              <input
+                type="range"
+                min="-3.14"
+                max="3.14"
+                step="0.05"
+                value={selectedWall.rotation}
+                onChange={(event) =>
+                  updateCustomWall(selectedWall.id, { rotation: Number(event.target.value) })
+                }
               />
             </label>
           </section>

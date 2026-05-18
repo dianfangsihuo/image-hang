@@ -98,6 +98,59 @@ button {
   overflow: auto;
 }
 
+.view-panel .upload-dropzone,
+.view-panel .button-row,
+.view-panel .editor-panel,
+.view-panel .collection-header,
+.view-panel .image-list,
+.view-panel .message {
+  display: none;
+}
+
+.view-console {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(75, 62, 48, 0.14);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.view-console strong,
+.view-console > span {
+  grid-column: 1 / -1;
+}
+
+.view-console strong {
+  color: #1f1a14;
+  font-size: 1.05rem;
+}
+
+.view-console > span {
+  color: #6e6254;
+  font-size: 0.84rem;
+}
+
+.view-console div {
+  padding: 12px;
+  border-radius: 8px;
+  background: #fbf7ef;
+}
+
+.view-console b,
+.view-console small {
+  display: block;
+}
+
+.view-console b {
+  font-size: 1.45rem;
+}
+
+.view-console small {
+  color: #756858;
+}
+
 .panel-header {
   display: flex;
   align-items: flex-start;
@@ -241,6 +294,11 @@ h1 {
   background: #e3d8c8;
 }
 
+.button-row .tool-button.secondary {
+  width: auto;
+  flex: 1;
+}
+
 .icon-button {
   width: 42px;
   color: #332b24;
@@ -344,6 +402,16 @@ h1 {
   grid-column: 1 / -1;
   color: #756858;
   font-size: 0.75rem;
+}
+
+.placement-note {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 6px;
+  color: #5b3b05;
+  background: #fff1c7;
+  font-size: 0.82rem;
+  font-weight: 800;
 }
 
 .collection-header {
