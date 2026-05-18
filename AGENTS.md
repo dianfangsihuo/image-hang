@@ -21,3 +21,8 @@ if (!globalThis.browser) globalThis.browser = await agent.browsers.get("extensio
 ## Self-Improvement
 
 On unexpected command/tool/API failure, user correction, outdated knowledge, or missing capability request, use `C:\Users\Administrator\.codex\skills\self-improving-agent\SKILL.md` and log only concise entries to `.learnings/`.
+
+## Dependencies
+
+- The user permits installing development dependencies as needed.
+- Playwright is installed globally at `C:\Users\Administrator\AppData\Roaming\npm\node_modules`. In Node REPL sessions, add that directory with `js_add_node_module_dir` before importing `playwright`.
