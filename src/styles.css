@@ -337,6 +337,18 @@ h1 {
   background: #e3d8c8;
 }
 
+.tool-button.danger {
+  color: #7d2929;
+  background: #ead9d3;
+}
+
+.tool-button:disabled,
+.icon-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
 .button-row .tool-button.secondary {
   width: auto;
   flex: 1;
@@ -481,6 +493,118 @@ h1 {
   color: #211b15;
   font-size: 0.82rem;
   line-height: 1.35;
+}
+
+.view-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+  padding: 4px;
+  border-radius: 8px;
+  background: rgba(68, 92, 78, 0.12);
+}
+
+.view-toggle button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 0;
+  height: 36px;
+  border-radius: 6px;
+  color: #4e5c50;
+  background: transparent;
+  font-size: 0.82rem;
+  font-weight: 900;
+}
+
+.view-toggle button.active {
+  color: #fffaf0;
+  background: #2e4c3e;
+}
+
+.room-selector {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.room-selector button {
+  height: 34px;
+  border: 1px solid rgba(75, 62, 48, 0.14);
+  border-radius: 6px;
+  color: #594d41;
+  background: #fbf7ef;
+  font-size: 0.8rem;
+  font-weight: 900;
+}
+
+.room-selector button.active {
+  border-color: rgba(246, 196, 83, 0.82);
+  color: #2b241d;
+  background: #fff1c7;
+}
+
+.component-market {
+  display: grid;
+  gap: 8px;
+}
+
+.market-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #211b15;
+}
+
+.market-heading strong {
+  font-size: 0.9rem;
+}
+
+.market-heading span {
+  color: #6a5c4c;
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.market-item {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 2px 10px;
+  align-items: center;
+  min-height: 54px;
+  padding: 9px 10px;
+  border: 1px solid rgba(75, 62, 48, 0.14);
+  border-radius: 8px;
+  color: #2c241d;
+  background: #fbf7ef;
+  text-align: left;
+}
+
+.market-item svg {
+  grid-row: 1 / span 2;
+  color: #2e4c3e;
+}
+
+.market-item strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.86rem;
+}
+
+.market-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #756858;
+  font-size: 0.74rem;
+}
+
+.market-item:disabled {
+  cursor: not-allowed;
+  opacity: 0.54;
 }
 
 .object-library {

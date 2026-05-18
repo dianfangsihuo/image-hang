@@ -3,7 +3,9 @@ import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type {
   AppMode,
+  EditorViewMode,
   GalleryCustomWall,
+  GalleryDoor,
   GalleryFrameLayout,
   GalleryImage,
   GalleryLayouts,
@@ -17,10 +19,19 @@ interface GallerySceneProps {
   layouts: GalleryLayouts;
   roomConfig: GalleryRoomConfig;
   customWalls: GalleryCustomWall[];
+  doors: GalleryDoor[];
   mode: AppMode;
+  editorViewMode: EditorViewMode;
   pendingPlacementImageId: string | null;
   selectedImageId: string | null;
+  selectedWallId: string | null;
+  selectedDoorId: string | null;
+  selectedRoomIndex: number;
   onSelectImage: (id: string) => void;
+  onSelectWall: (id: string) => void;
+  onSelectDoor: (id: string) => void;
+  onSelectRoom: (roomIndex: number) => void;
+  onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
 }
 
@@ -239,7 +250,6 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
   const { camera, gl } = useThree();
   const yaw = useRef(0);
   const pitch = useRef(0);
-  const isDragging = useRef(false);
 
   useEffect(() => {
     camera.rotation.order = "YXZ";
@@ -283,37 +293,22 @@ function FirstPersonLookControls({ mode }: { mode: AppMode }) {
         return;
       }
 
-      if (mode === "edit" && event.target === canvas && event.button === 0) {
-        isDragging.current = true;
-      }
-
-      if (mode === "view" && event.target === canvas && event.button === 0) {
+      if ((mode === "view" || mode === "edit") && event.target === canvas && event.button === 0) {
         requestPointerLock();
       }
-    };
-
-    const onPointerUp = () => {
-      isDragging.current = false;
     };
 
     const onMouseMove = (event: MouseEvent) => {
       if (document.pointerLockElement === canvas) {
         rotateBy(event.movementX, event.movementY);
-        return;
-      }
-
-      if (mode === "edit" && isDragging.current) {
-        rotateBy(event.movementX, event.movementY);
       }
     };
 
     document.addEventListener("pointerdown", onDocumentPointerDown);
-    document.addEventListener("pointerup", onPointerUp);
     document.addEventListener("mousemove", onMouseMove);
 
     return () => {
       document.removeEventListener("pointerdown", onDocumentPointerDown);
-      document.removeEventListener("pointerup", onPointerUp);
       document.removeEventListener("mousemove", onMouseMove);
     };
   }, [camera, gl, mode]);
@@ -528,13 +523,17 @@ function Room({
   room,
   roomIndex,
   isEditMode,
+  isSelected,
   pendingPlacementImageId,
+  onSelectRoom,
   onPlaceImageOnWall,
 }: {
   room: GalleryRoomConfig;
   roomIndex: number;
   isEditMode: boolean;
+  isSelected: boolean;
   pendingPlacementImageId: string | null;
+  onSelectRoom: (roomIndex: number) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
 }) {
   const xOffset = roomOffset(room, roomIndex);
@@ -551,13 +550,27 @@ function Room({
       clamp(local.y + room.height / 2, 1.1, room.height - 1.1),
     );
   };
+  const selectRoom = (event: ThreeEvent<MouseEvent>) => {
+    if (!isEditMode) {
+      return;
+    }
+
+    event.stopPropagation();
+    onSelectRoom(roomIndex);
+  };
 
   return (
     <group position={[xOffset, 0, 0]}>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow onClick={selectRoom}>
         <planeGeometry args={[room.width, room.depth]} />
-        <meshStandardMaterial color="#b9b6aa" roughness={0.58} metalness={0.04} />
+        <meshStandardMaterial color={isSelected && isEditMode ? "#c5bdab" : "#b9b6aa"} roughness={0.58} metalness={0.04} />
       </mesh>
+      {isSelected && isEditMode ? (
+        <mesh position={[0, 0.045, 0]}>
+          <boxGeometry args={[room.width, 0.035, room.depth]} />
+          <meshBasicMaterial color="#f6c453" transparent opacity={0.16} />
+        </mesh>
+      ) : null}
       <mesh position={[0, room.height, 0]} rotation={[Math.PI / 2, 0, 0]}>
         <planeGeometry args={[room.width, room.depth]} />
         <meshStandardMaterial color="#efe9dc" roughness={0.82} />
@@ -606,19 +619,37 @@ function CustomWall({
   wall,
   room,
   isEditMode,
+  isSelected,
+  editorViewMode,
   pendingPlacementImageId,
+  onSelectWall,
+  onUpdateCustomWall,
   onPlaceImageOnWall,
 }: {
   wall: GalleryCustomWall;
   room: GalleryRoomConfig;
   isEditMode: boolean;
+  isSelected: boolean;
+  editorViewMode: EditorViewMode;
   pendingPlacementImageId: string | null;
+  onSelectWall: (id: string) => void;
+  onUpdateCustomWall: (id: string, patch: Partial<GalleryCustomWall>) => void;
   onPlaceImageOnWall: (wall: GalleryWallTarget, offset: number, height: number) => void;
 }) {
   const xOffset = roomOffset(room, wall.roomIndex);
+  const dragPlane = useMemo(() => new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), []);
+  const dragPoint = useMemo(() => new THREE.Vector3(), []);
+  const isDragging = useRef(false);
+
+  function selectWall() {
+    if (isEditMode) {
+      onSelectWall(wall.id);
+    }
+  }
 
   function handleClick(event: ThreeEvent<MouseEvent>) {
     if (!isEditMode || !pendingPlacementImageId) {
+      selectWall();
       return;
     }
 
@@ -627,16 +658,124 @@ function CustomWall({
     onPlaceImageOnWall(wall.id, local.x, clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45));
   }
 
+  function startDrag(event: ThreeEvent<PointerEvent>) {
+    if (!isEditMode || pendingPlacementImageId || editorViewMode !== "topdown") {
+      return;
+    }
+
+    event.stopPropagation();
+    selectWall();
+    isDragging.current = true;
+    const target = event.target as HTMLElement;
+    target.setPointerCapture?.(event.pointerId);
+  }
+
+  function drag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current || !event.ray.intersectPlane(dragPlane, dragPoint)) {
+      return;
+    }
+
+    event.stopPropagation();
+    onUpdateCustomWall(wall.id, {
+      x: dragPoint.x - xOffset,
+      z: dragPoint.z,
+    });
+  }
+
+  function stopDrag(event: ThreeEvent<PointerEvent>) {
+    if (!isDragging.current) {
+      return;
+    }
+
+    const target = event.target as HTMLElement;
+    target.releasePointerCapture?.(event.pointerId);
+    isDragging.current = false;
+  }
+
   return (
     <group position={[xOffset + wall.x, wall.height / 2, wall.z]} rotation={[0, wall.rotation, 0]}>
-      <mesh onClick={handleClick} receiveShadow castShadow>
+      {isSelected ? (
+        <mesh position={[0, 0, 0]}>
+          <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, 0.24]} />
+          <meshBasicMaterial color="#f6c453" transparent opacity={0.28} />
+        </mesh>
+      ) : null}
+      <mesh
+        onClick={handleClick}
+        onPointerDown={startDrag}
+        onPointerMove={drag}
+        onPointerUp={stopDrag}
+        onPointerCancel={stopDrag}
+        receiveShadow
+        castShadow
+      >
         <boxGeometry args={[wall.length, wall.height, 0.18]} />
-        <meshStandardMaterial color="#ded7c8" roughness={0.82} />
+        <meshStandardMaterial color={isSelected ? "#e7dbc0" : "#ded7c8"} roughness={0.82} />
       </mesh>
       <mesh position={[0, 0, 0.096]}>
         <planeGeometry args={[wall.length, wall.height]} />
         <meshStandardMaterial color="#eee8da" roughness={0.9} />
       </mesh>
+    </group>
+  );
+}
+
+function Door({
+  door,
+  room,
+  customWalls,
+  isEditMode,
+  isSelected,
+  onSelectDoor,
+}: {
+  door: GalleryDoor;
+  room: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  isEditMode: boolean;
+  isSelected: boolean;
+  onSelectDoor: (id: string) => void;
+}) {
+  const builtWall = parseBuiltWallTarget(door.wall);
+  const customWall = builtWall
+    ? null
+    : customWalls.find((wall) => wall.id === door.wall) ?? null;
+  const mount = builtWall
+    ? getWallMount(room, builtWall.wall, builtWall.roomIndex)
+    : customWall
+      ? getCustomWallMount(room, customWall)
+      : null;
+
+  if (!mount) {
+    return null;
+  }
+
+  function handleClick(event: ThreeEvent<MouseEvent>) {
+    if (!isEditMode) {
+      return;
+    }
+
+    event.stopPropagation();
+    onSelectDoor(door.id);
+  }
+
+  return (
+    <group position={mount.position} rotation={mount.rotation}>
+      <group position={[door.offset, door.height / 2, 0.23]}>
+        {isSelected ? (
+          <mesh position={[0, 0, -0.018]}>
+            <planeGeometry args={[door.width + 0.28, door.height + 0.22]} />
+            <meshBasicMaterial color="#f6c453" transparent opacity={0.88} />
+          </mesh>
+        ) : null}
+        <mesh onClick={handleClick}>
+          <boxGeometry args={[door.width, door.height, 0.16]} />
+          <meshStandardMaterial color="#43372d" roughness={0.66} metalness={0.08} />
+        </mesh>
+        <mesh position={[door.width * 0.36, 0.04, 0.095]} onClick={handleClick}>
+          <sphereGeometry args={[0.055, 12, 12]} />
+          <meshStandardMaterial color="#d2b56d" roughness={0.38} metalness={0.42} />
+        </mesh>
+      </group>
     </group>
   );
 }
@@ -759,13 +898,23 @@ export default function GalleryScene({
   layouts,
   roomConfig,
   customWalls,
+  doors,
   mode,
+  editorViewMode,
   pendingPlacementImageId,
   selectedImageId,
+  selectedWallId,
+  selectedDoorId,
+  selectedRoomIndex,
   onSelectImage,
+  onSelectWall,
+  onSelectDoor,
+  onSelectRoom,
+  onUpdateCustomWall,
   onPlaceImageOnWall,
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
+  const useTopdownEditor = isEditMode && editorViewMode === "topdown";
 
   return (
     <Canvas
@@ -789,7 +938,9 @@ export default function GalleryScene({
           room={roomConfig}
           roomIndex={roomIndex}
           isEditMode={isEditMode}
+          isSelected={selectedRoomIndex === roomIndex}
           pendingPlacementImageId={pendingPlacementImageId}
+          onSelectRoom={onSelectRoom}
           onPlaceImageOnWall={onPlaceImageOnWall}
         />
       ))}
@@ -799,8 +950,23 @@ export default function GalleryScene({
           wall={wall}
           room={roomConfig}
           isEditMode={isEditMode}
+          isSelected={selectedWallId === wall.id}
+          editorViewMode={editorViewMode}
           pendingPlacementImageId={pendingPlacementImageId}
+          onSelectWall={onSelectWall}
+          onUpdateCustomWall={onUpdateCustomWall}
           onPlaceImageOnWall={onPlaceImageOnWall}
+        />
+      ))}
+      {doors.map((door) => (
+        <Door
+          key={door.id}
+          door={door}
+          room={roomConfig}
+          customWalls={customWalls}
+          isEditMode={isEditMode}
+          isSelected={selectedDoorId === door.id}
+          onSelectDoor={onSelectDoor}
         />
       ))}
       {images.length > 0 ? (
@@ -819,7 +985,7 @@ export default function GalleryScene({
       ) : (
         <EmptyFrames count={6} room={roomConfig} />
       )}
-      {isEditMode ? (
+      {useTopdownEditor ? (
         <EditorCameraControls room={roomConfig} />
       ) : (
         <>

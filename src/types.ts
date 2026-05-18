@@ -1,5 +1,6 @@
 export type GalleryImageSource = "local" | "supabase" | "sample";
 export type AppMode = "view" | "edit";
+export type EditorViewMode = "topdown" | "firstPerson";
 export type GalleryWall = "north" | "south" | "west" | "east";
 export type GalleryWallTarget = GalleryWall | string;
 
@@ -43,4 +44,14 @@ export interface GalleryCustomWall {
   length: number;
   height: number;
   rotation: number;
+}
+
+export interface GalleryDoor {
+  id: string;
+  name: string;
+  roomIndex: number;
+  wall: GalleryWallTarget;
+  offset: number;
+  width: number;
+  height: number;
 }

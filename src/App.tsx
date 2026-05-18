@@ -26,18 +26,23 @@ import {
   clearStoredLayouts,
   clearStoredRoomConfig,
   clearStoredCustomWalls,
+  clearStoredDoors,
   defaultRoomConfig,
   loadStoredCustomWalls,
+  loadStoredDoors,
   loadStoredLayouts,
   loadStoredRoomConfig,
   saveStoredCustomWalls,
+  saveStoredDoors,
   saveStoredLayouts,
   saveStoredRoomConfig,
 } from "./lib/layoutStorage";
 import { createSampleImages } from "./lib/sampleArt";
 import type {
   AppMode,
+  EditorViewMode,
   GalleryCustomWall,
+  GalleryDoor,
   GalleryFrameLayout,
   GalleryImage,
   GalleryLayouts,
@@ -162,9 +167,13 @@ function App() {
   const [customWalls, setCustomWalls] = useState<GalleryCustomWall[]>(() =>
     loadStoredCustomWalls(),
   );
+  const [doors, setDoors] = useState<GalleryDoor[]>(() => loadStoredDoors());
   const [selectedWallId, setSelectedWallId] = useState<string | null>(null);
+  const [selectedDoorId, setSelectedDoorId] = useState<string | null>(null);
+  const [selectedRoomIndex, setSelectedRoomIndex] = useState(0);
   const [pendingPlacementIds, setPendingPlacementIds] = useState<string[]>([]);
   const [mode, setMode] = useState<AppMode>("view");
+  const [editorViewMode, setEditorViewMode] = useState<EditorViewMode>("topdown");
   const [selectedImageId, setSelectedImageId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
@@ -195,6 +204,7 @@ function App() {
     if (nextMode === "view") {
       setSelectedImageId(null);
       setSelectedWallId(null);
+      setSelectedDoorId(null);
     }
   }
 
@@ -240,6 +250,14 @@ function App() {
   useEffect(() => {
     saveStoredCustomWalls(customWalls);
   }, [customWalls]);
+
+  useEffect(() => {
+    saveStoredDoors(doors);
+  }, [doors]);
+
+  useEffect(() => {
+    setSelectedRoomIndex((current) => clamp(Math.round(current), 0, roomConfig.roomCount - 1));
+  }, [roomConfig.roomCount]);
 
   useEffect(() => {
     if (mode !== "edit") {
@@ -316,13 +334,18 @@ function App() {
     clearStoredLayouts();
     clearStoredRoomConfig();
     clearStoredCustomWalls();
+    clearStoredDoors();
     previousImages.forEach(revokeImageUrl);
     setImages([]);
     setLayouts({});
     setRoomConfig(defaultRoomConfig);
     setCustomWalls([]);
+    setDoors([]);
     setPendingPlacementIds([]);
     setSelectedImageId(null);
+    setSelectedWallId(null);
+    setSelectedDoorId(null);
+    setSelectedRoomIndex(0);
     setMessage("已恢复示例画廊");
   }
 
@@ -375,6 +398,29 @@ function App() {
         ),
       );
 
+      setCustomWalls((currentWalls) =>
+        currentWalls.map((wall) => ({
+          ...wall,
+          roomIndex: Math.min(wall.roomIndex, next.roomCount - 1),
+          x: clamp(wall.x, -next.width / 2 + 1, next.width / 2 - 1),
+          z: clamp(wall.z, -next.depth / 2 + 1, next.depth / 2 - 1),
+          length: clamp(wall.length, 2, next.width - 1),
+          height: clamp(wall.height, 2.2, next.height - 0.35),
+        })),
+      );
+      setDoors((currentDoors) =>
+        currentDoors.map((door) => ({
+          ...door,
+          roomIndex: Math.min(door.roomIndex, next.roomCount - 1),
+          offset: clamp(
+            door.offset,
+            -getWallOffsetLimit(next, customWalls, door.wall),
+            getWallOffsetLimit(next, customWalls, door.wall),
+          ),
+          height: clamp(door.height, 1.9, next.height - 0.5),
+        })),
+      );
+
       return next;
     });
   }
@@ -395,11 +441,86 @@ function App() {
 
   function addRoom() {
     updateRoomConfig({ roomCount: roomConfig.roomCount + 1 });
+    setSelectedRoomIndex(roomConfig.roomCount);
+    setSelectedWallId(null);
+    setSelectedDoorId(null);
     setMessage(`已新增房间 ${roomConfig.roomCount + 1}`);
   }
 
+  function deleteRoom(roomIndex: number) {
+    if (roomConfig.roomCount <= 1) {
+      setMessage("至少需要保留一个房间");
+      return;
+    }
+
+    const removedWallIds = customWalls
+      .filter((wall) => wall.roomIndex === roomIndex)
+      .map((wall) => wall.id);
+    const removedWallIdSet = new Set(removedWallIds);
+
+    setLayouts((currentLayouts) =>
+      Object.fromEntries(
+        Object.entries(currentLayouts).flatMap(([id, layout]) => {
+          const built = parseBuiltWallTarget(layout.wall);
+
+          if (built) {
+            if (built.roomIndex === roomIndex) {
+              return [];
+            }
+
+            return [
+              [
+                id,
+                {
+                  ...layout,
+                  wall: builtWallTarget(
+                    built.roomIndex > roomIndex ? built.roomIndex - 1 : built.roomIndex,
+                    built.wall,
+                  ),
+                },
+              ],
+            ];
+          }
+
+          if (removedWallIdSet.has(layout.wall)) {
+            return [];
+          }
+
+          return [[id, layout]];
+        }),
+      ),
+    );
+    setCustomWalls((current) =>
+      current
+        .filter((wall) => wall.roomIndex !== roomIndex)
+        .map((wall) => ({
+          ...wall,
+          roomIndex: wall.roomIndex > roomIndex ? wall.roomIndex - 1 : wall.roomIndex,
+        })),
+    );
+    setDoors((current) =>
+      current
+        .filter((door) => door.roomIndex !== roomIndex && !removedWallIdSet.has(door.wall))
+        .map((door) => ({
+          ...door,
+          roomIndex: door.roomIndex > roomIndex ? door.roomIndex - 1 : door.roomIndex,
+          wall: parseBuiltWallTarget(door.wall)
+            ? builtWallTarget(
+                Math.max(0, door.roomIndex > roomIndex ? door.roomIndex - 1 : door.roomIndex),
+                parseBuiltWallTarget(door.wall)?.wall ?? "north",
+              )
+            : door.wall,
+        })),
+    );
+    updateRoomConfig({ roomCount: roomConfig.roomCount - 1 });
+    setSelectedRoomIndex(Math.max(0, Math.min(roomIndex, roomConfig.roomCount - 2)));
+    setSelectedWallId(null);
+    setSelectedDoorId(null);
+    setMessage(`已删除房间 ${roomIndex + 1}`);
+  }
+
   function addCustomWall() {
-    const roomIndex = Math.max(0, roomConfig.roomCount - 1);
+    const roomIndex = selectedRoomIndex;
     const wall: GalleryCustomWall = {
       id: `wall-${crypto.randomUUID()}`,
       name: `自定义墙 ${customWalls.length + 1}`,
@@ -413,6 +534,7 @@ function App() {
 
     setCustomWalls((current) => [...current, wall]);
     setSelectedWallId(wall.id);
+    setSelectedDoorId(null);
     setMessage(`已新增 ${wall.name}`);
   }
 
@@ -433,6 +555,74 @@ function App() {
           : wall,
       ),
     );
+  }
+
+  function deleteCustomWall(id: string) {
+    setCustomWalls((current) => current.filter((wall) => wall.id !== id));
+    setDoors((current) => current.filter((door) => door.wall !== id));
+    setLayouts((current) =>
+      Object.fromEntries(Object.entries(current).filter(([, layout]) => layout.wall !== id)),
+    );
+    setSelectedWallId(null);
+    setMessage("已删除自定义墙壁");
+  }
+
+  function getDoorRoomIndex(wall: GalleryWallTarget) {
+    const built = parseBuiltWallTarget(wall);
+
+    if (built) {
+      return built.roomIndex;
+    }
+
+    return customWalls.find((item) => item.id === wall)?.roomIndex ?? selectedRoomIndex;
+  }
+
+  function addDoor() {
+    const wall = selectedWallId ?? builtWallTarget(selectedRoomIndex, "north");
+    const door: GalleryDoor = {
+      id: `door-${crypto.randomUUID()}`,
+      name: `门 ${doors.length + 1}`,
+      roomIndex: getDoorRoomIndex(wall),
+      wall,
+      offset: 0,
+      width: 1.55,
+      height: Math.min(2.35, roomConfig.height - 0.6),
+    };
+
+    setDoors((current) => [...current, door]);
+    setSelectedDoorId(door.id);
+    setSelectedWallId(null);
+    setMessage(`已新增 ${door.name}`);
+  }
+
+  function updateDoor(id: string, patch: Partial<GalleryDoor>) {
+    setDoors((current) =>
+      current.map((door) => {
+        if (door.id !== id) {
+          return door;
+        }
+
+        const wall = patch.wall ?? door.wall;
+        const roomIndex = getDoorRoomIndex(wall);
+        const limit = getWallOffsetLimit(roomConfig, customWalls, wall);
+
+        return {
+          ...door,
+          ...patch,
+          wall,
+          roomIndex,
+          offset: clamp(patch.offset ?? door.offset, -limit, limit),
+          width: clamp(patch.width ?? door.width, 0.8, 3.2),
+          height: clamp(patch.height ?? door.height, 1.8, roomConfig.height - 0.4),
+        };
+      }),
+    );
+  }
+
+  function deleteDoor(id: string) {
+    setDoors((current) => current.filter((door) => door.id !== id));
+    setSelectedDoorId(null);
+    setMessage("已删除门");
   }
 
   function placePendingImage(wall: GalleryWallTarget, offset: number, height: number) {
@@ -463,6 +653,7 @@ function App() {
 
   const wallOptions = getWallOptions();
   const selectedWall = customWalls.find((wall) => wall.id === selectedWallId) ?? customWalls[0];
+  const selectedDoor = doors.find((door) => door.id === selectedDoorId) ?? doors[0];
 
   return (
     <main className={`app-shell ${mode}-shell`}>
@@ -472,10 +663,29 @@ function App() {
           layouts={layouts}
           roomConfig={roomConfig}
           customWalls={customWalls}
+          doors={doors}
           mode={mode}
+          editorViewMode={editorViewMode}
           pendingPlacementImageId={pendingPlacementIds[0] ?? null}
           selectedImageId={selectedImageId}
+          selectedWallId={selectedWallId}
+          selectedDoorId={selectedDoorId}
+          selectedRoomIndex={selectedRoomIndex}
           onSelectImage={setSelectedImageId}
+          onSelectWall={(id) => {
+            setSelectedWallId(id);
+            setSelectedDoorId(null);
+          }}
+          onSelectDoor={(id) => {
+            setSelectedDoorId(id);
+            setSelectedWallId(null);
+          }}
+          onSelectRoom={(roomIndex) => {
+            setSelectedRoomIndex(roomIndex);
+            setSelectedWallId(null);
+            setSelectedDoorId(null);
+          }}
+          onUpdateCustomWall={updateCustomWall}
           onPlaceImageOnWall={placePendingImage}
         />
         <div className="floating-mode-switch" aria-label="Mode switch">
@@ -501,7 +711,7 @@ function App() {
         {mode === "edit" ? (
           <div className="edit-badge">
             <Move size={16} />
-            <span>俯视编辑</span>
+            <span>{editorViewMode === "topdown" ? "俯视编辑" : "第一人称编辑"}</span>
           </div>
         ) : null}
       </section>
@@ -594,9 +804,31 @@ function App() {
               <Pencil size={17} />
               <span>编辑工作台</span>
             </div>
+            <div className="view-toggle" aria-label="Editor view mode">
+              <button
+                type="button"
+                className={editorViewMode === "topdown" ? "active" : ""}
+                onClick={() => setEditorViewMode("topdown")}
+              >
+                <Move size={15} />
+                <span>俯视</span>
+              </button>
+              <button
+                type="button"
+                className={editorViewMode === "firstPerson" ? "active" : ""}
+                onClick={() => setEditorViewMode("firstPerson")}
+              >
+                <Eye size={15} />
+                <span>第一人称</span>
+              </button>
+            </div>
             <div className="hint-grid">
               <span>视角</span>
-              <strong>拖动画布平移，滚轮缩放俯视图</strong>
+              <strong>
+                {editorViewMode === "topdown"
+                  ? "拖动画布平移，滚轮缩放俯视图"
+                  : "点击画布锁定视角，WASD 移动，Shift 疾跑"}
+              </strong>
               <span>挂画</span>
               <strong>
                 {pendingPlacementIds.length > 0
@@ -604,7 +836,7 @@ function App() {
                   : "先上传图片，再点击墙面定位"}
               </strong>
               <span>对象</span>
-              <strong>房间、墙壁和画框已独立编辑</strong>
+              <strong>从组件市场添加房间、墙壁、门，再选择对象调整参数</strong>
             </div>
           </section>
         ) : null}
@@ -712,24 +944,58 @@ function App() {
                 <Plus size={17} />
                 <span>新增房间</span>
               </button>
-              <button type="button" className="tool-button secondary" onClick={addCustomWall}>
-                <Plus size={17} />
-                <span>新增墙壁</span>
+              <button
+                type="button"
+                className="tool-button secondary danger"
+                onClick={() => deleteRoom(selectedRoomIndex)}
+                disabled={roomConfig.roomCount <= 1}
+              >
+                <Trash2 size={17} />
+                <span>删除房间</span>
               </button>
             </div>
 
-            <div className="object-library" aria-label="Object library">
-              <button type="button" className="object-chip active" onClick={addCustomWall}>
-                <Ruler size={15} />
-                <span>墙壁</span>
+            <div className="room-selector" aria-label="Room selector">
+              {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
+                <button
+                  key={roomIndex}
+                  type="button"
+                  className={selectedRoomIndex === roomIndex ? "active" : ""}
+                  onClick={() => {
+                    setSelectedRoomIndex(roomIndex);
+                    setSelectedWallId(null);
+                    setSelectedDoorId(null);
+                  }}
+                >
+                  房间 {roomIndex + 1}
+                </button>
+              ))}
+            </div>
+
+            <div className="component-market" aria-label="Component market">
+              <div className="market-heading">
+                <strong>组件市场</strong>
+                <span>添加到房间 {selectedRoomIndex + 1}</span>
+              </div>
+              <button type="button" className="market-item" onClick={addRoom}>
+                <Plus size={18} />
+                <strong>房间</strong>
+                <span>扩展连续展厅空间</span>
               </button>
-              <button type="button" className="object-chip" disabled title="后续可扩展门洞对象">
-                <DoorOpen size={15} />
-                <span>门</span>
+              <button type="button" className="market-item" onClick={addCustomWall}>
+                <Ruler size={18} />
+                <strong>墙壁</strong>
+                <span>可拖拽、旋转、调整长度</span>
               </button>
-              <button type="button" className="object-chip" disabled title="后续可扩展展台对象">
-                <Maximize2 size={15} />
-                <span>展台</span>
+              <button type="button" className="market-item" onClick={addDoor}>
+                <DoorOpen size={18} />
+                <strong>门</strong>
+                <span>挂到墙面形成门位</span>
+              </button>
+              <button type="button" className="market-item" disabled title="后续可扩展展台对象">
+                <Maximize2 size={18} />
+                <strong>展台</strong>
+                <span>后续扩展陈列物件</span>
               </button>
             </div>
 
@@ -877,6 +1143,91 @@ function App() {
                 }
               />
             </label>
+
+            <button
+              type="button"
+              className="tool-button secondary danger"
+              onClick={() => deleteCustomWall(selectedWall.id)}
+            >
+              <Trash2 size={17} />
+              <span>删除墙壁</span>
+            </button>
+          </section>
+        ) : null}
+
+        {mode === "edit" && doors.length > 0 && selectedDoor ? (
+          <section className="editor-panel" aria-label="Door editor">
+            <div className="editor-heading">
+              <DoorOpen size={17} />
+              <span>{selectedDoor.name}</span>
+            </div>
+
+            <label className="field">
+              <span>门所在墙面</span>
+              <select
+                value={selectedDoor.wall}
+                onChange={(event) =>
+                  updateDoor(selectedDoor.id, { wall: event.target.value as GalleryWallTarget })
+                }
+              >
+                {wallOptions.map(([wall, label]) => (
+                  <option key={wall} value={wall}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <label className="field">
+              <span>位置 {selectedDoor.offset.toFixed(1)}</span>
+              <input
+                type="range"
+                min={-getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
+                max={getWallOffsetLimit(roomConfig, customWalls, selectedDoor.wall)}
+                step="0.1"
+                value={selectedDoor.offset}
+                onChange={(event) =>
+                  updateDoor(selectedDoor.id, { offset: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>宽度 {selectedDoor.width.toFixed(1)}</span>
+              <input
+                type="range"
+                min="0.8"
+                max="3.2"
+                step="0.1"
+                value={selectedDoor.width}
+                onChange={(event) =>
+                  updateDoor(selectedDoor.id, { width: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <label className="field">
+              <span>高度 {selectedDoor.height.toFixed(1)}</span>
+              <input
+                type="range"
+                min="1.8"
+                max={roomConfig.height - 0.4}
+                step="0.1"
+                value={selectedDoor.height}
+                onChange={(event) =>
+                  updateDoor(selectedDoor.id, { height: Number(event.target.value) })
+                }
+              />
+            </label>
+
+            <button
+              type="button"
+              className="tool-button secondary danger"
+              onClick={() => deleteDoor(selectedDoor.id)}
+            >
+              <Trash2 size={17} />
+              <span>删除门</span>
+            </button>
           </section>
         ) : null}
 

@@ -1,8 +1,9 @@
-import type { GalleryCustomWall, GalleryLayouts, GalleryRoomConfig } from "../types";
+import type { GalleryCustomWall, GalleryDoor, GalleryLayouts, GalleryRoomConfig } from "../types";
 
 const LAYOUT_STORAGE_KEY = "image-hang.gallery-layouts";
 const ROOM_STORAGE_KEY = "image-hang.room-config";
 const WALL_STORAGE_KEY = "image-hang.custom-walls";
+const DOOR_STORAGE_KEY = "image-hang.doors";
 
 export const defaultRoomConfig: GalleryRoomConfig = {
   width: 18,
@@ -74,4 +75,21 @@ export function saveStoredCustomWalls(walls: GalleryCustomWall[]) {
 
 export function clearStoredCustomWalls() {
   localStorage.removeItem(WALL_STORAGE_KEY);
+}
+
+export function loadStoredDoors(): GalleryDoor[] {
+  try {
+    const raw = localStorage.getItem(DOOR_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as GalleryDoor[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function saveStoredDoors(doors: GalleryDoor[]) {
+  localStorage.setItem(DOOR_STORAGE_KEY, JSON.stringify(doors));
+}
+
+export function clearStoredDoors() {
+  localStorage.removeItem(DOOR_STORAGE_KEY);
 }
