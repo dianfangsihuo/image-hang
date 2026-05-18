@@ -1,4 +1,3 @@
-import { PointerLockControls } from "@react-three/drei";
 import { Canvas, ThreeEvent, useFrame, useLoader, useThree } from "@react-three/fiber";
 import { useEffect, useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -67,8 +66,8 @@ export function getDefaultLayout(image: GalleryImage, index: number): GalleryFra
   };
 }
 
-function PlayerMovement({ enabled }: { enabled: boolean }) {
-  const { camera } = useThree();
+function PlayerMovement() {
+  const { camera, gl } = useThree();
   const keys = useRef(new Set<string>());
   const verticalVelocity = useRef(0);
   const isGrounded = useRef(true);
@@ -80,18 +79,33 @@ function PlayerMovement({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     camera.position.set(0, eyeHeight, 7);
 
+    const shouldIgnoreKeyboard = (event: KeyboardEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const isPointerLocked = document.pointerLockElement === gl.domElement;
+
+      return Boolean(target?.closest(".control-panel")) && !isPointerLocked;
+    };
+
     const onKeyDown = (event: KeyboardEvent) => {
+      if (shouldIgnoreKeyboard(event)) {
+        return;
+      }
+
       if (event.code === "Space") {
         event.preventDefault();
       }
       keys.current.add(event.code);
 
-      if (enabled && event.code === "Space" && isGrounded.current) {
+      if (event.code === "Space" && isGrounded.current) {
         verticalVelocity.current = 5.4;
         isGrounded.current = false;
       }
     };
     const onKeyUp = (event: KeyboardEvent) => {
+      if (shouldIgnoreKeyboard(event)) {
+        return;
+      }
+
       keys.current.delete(event.code);
     };
 
@@ -102,13 +116,9 @@ function PlayerMovement({ enabled }: { enabled: boolean }) {
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
     };
-  }, [camera, enabled]);
+  }, [camera, gl]);
 
   useFrame((_, delta) => {
-    if (!enabled) {
-      return;
-    }
-
     direction.set(0, 0, 0);
 
     if (keys.current.has("KeyW") || keys.current.has("ArrowUp")) {
@@ -155,6 +165,98 @@ function PlayerMovement({ enabled }: { enabled: boolean }) {
     camera.position.x = THREE.MathUtils.clamp(camera.position.x, -7.5, 7.5);
     camera.position.z = THREE.MathUtils.clamp(camera.position.z, -9.5, 9.5);
   });
+
+  return null;
+}
+
+function FirstPersonLookControls({ mode }: { mode: AppMode }) {
+  const { camera, gl } = useThree();
+  const yaw = useRef(0);
+  const pitch = useRef(0);
+  const isDragging = useRef(false);
+
+  useEffect(() => {
+    camera.rotation.order = "YXZ";
+    yaw.current = camera.rotation.y;
+    pitch.current = camera.rotation.x;
+  }, [camera]);
+
+  useEffect(() => {
+    const canvas = gl.domElement;
+    const sensitivity = 0.0024;
+
+    const applyRotation = () => {
+      camera.rotation.order = "YXZ";
+      camera.rotation.y = yaw.current;
+      camera.rotation.x = pitch.current;
+      camera.rotation.z = 0;
+    };
+
+    const rotateBy = (movementX: number, movementY: number) => {
+      yaw.current -= movementX * sensitivity;
+      pitch.current = THREE.MathUtils.clamp(
+        pitch.current - movementY * sensitivity,
+        -Math.PI / 2 + 0.08,
+        Math.PI / 2 - 0.08,
+      );
+      applyRotation();
+    };
+
+    const requestPointerLock = () => {
+      if (document.pointerLockElement !== canvas) {
+        void canvas.requestPointerLock();
+      }
+    };
+
+    const onDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const isViewTrigger = Boolean(target?.closest(".enter-button, .view-mode-button"));
+
+      if (isViewTrigger) {
+        requestPointerLock();
+        return;
+      }
+
+      if (mode === "edit" && event.target === canvas && event.button === 0) {
+        isDragging.current = true;
+      }
+
+      if (mode === "view" && event.target === canvas && event.button === 0) {
+        requestPointerLock();
+      }
+    };
+
+    const onPointerUp = () => {
+      isDragging.current = false;
+    };
+
+    const onMouseMove = (event: MouseEvent) => {
+      if (document.pointerLockElement === canvas) {
+        rotateBy(event.movementX, event.movementY);
+        return;
+      }
+
+      if (mode === "edit" && isDragging.current) {
+        rotateBy(event.movementX, event.movementY);
+      }
+    };
+
+    document.addEventListener("pointerdown", onDocumentPointerDown);
+    document.addEventListener("pointerup", onPointerUp);
+    document.addEventListener("mousemove", onMouseMove);
+
+    return () => {
+      document.removeEventListener("pointerdown", onDocumentPointerDown);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.removeEventListener("mousemove", onMouseMove);
+    };
+  }, [camera, gl, mode]);
+
+  useEffect(() => {
+    if (mode === "edit" && document.pointerLockElement === gl.domElement) {
+      document.exitPointerLock();
+    }
+  }, [gl, mode]);
 
   return null;
 }
@@ -323,8 +425,8 @@ export default function GalleryScene({
       ) : (
         <EmptyFrames count={6} />
       )}
-      <PlayerMovement enabled={!isEditMode} />
-      {!isEditMode ? <PointerLockControls selector=".enter-button" /> : null}
+      <FirstPersonLookControls mode={mode} />
+      <PlayerMovement />
     </Canvas>
   );
 }

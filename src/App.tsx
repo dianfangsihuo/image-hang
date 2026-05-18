@@ -235,8 +235,9 @@ function App() {
         <div className="mode-switch" aria-label="Mode switch">
           <button
             type="button"
-            className={mode === "view" ? "active" : ""}
+            className={`view-mode-button ${mode === "view" ? "active" : ""}`}
             onClick={() => setMode("view")}
+            title="进入画廊"
           >
             <Eye size={17} />
             <span>观赏</span>
@@ -339,7 +340,7 @@ function App() {
             </label>
 
             <label className="field">
-              <span>宽度 {selectedLayout.width.toFixed(1)}</span>
+              <span>大小 {selectedLayout.width.toFixed(1)}</span>
               <input
                 type="range"
                 min="1.2"
