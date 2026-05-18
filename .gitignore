@@ -1,1 +1,5 @@
 .learnings/
+node_modules/
+dist/
+*.log
+.env.local
