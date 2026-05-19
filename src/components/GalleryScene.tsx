@@ -283,6 +283,81 @@ function getDoorInnerPoint(
     .addScaledVector(basis.normal, inset);
 }
 
+function getAttachedRoomCenter(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  door: GalleryDoor,
+) {
+  if (door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
+    return null;
+  }
+
+  if (door.connectsToRoomIndex === door.roomIndex) {
+    return null;
+  }
+
+  const built = parseBuiltWallTarget(door.wall);
+  if (!built) {
+    return null;
+  }
+
+  const basis = getWallBasis(room, door.wall, customWalls, 0);
+  if (!basis) {
+    return null;
+  }
+
+  const targetRoom = getRoomDimensions(room, door.connectsToRoomIndex);
+  const normalExtent =
+    built.wall === "north" || built.wall === "south"
+      ? targetRoom.depth / 2
+      : targetRoom.width / 2;
+  const doorway = basis.position.clone().addScaledVector(basis.axis, door.offset);
+  const center = doorway.addScaledVector(basis.normal, -normalExtent);
+
+  return {
+    x: center.x,
+    z: center.z,
+  };
+}
+
+function getRoomConfigWithDoorAttachments(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  doors: GalleryDoor[],
+) {
+  const rooms = Array.from({ length: room.roomCount }, (_, roomIndex) => {
+    const dimensions = getRoomDimensions(room, roomIndex);
+    const center = getRoomCenter(room, roomIndex);
+
+    return {
+      ...dimensions,
+      x: center.x,
+      z: center.z,
+    };
+  });
+  const resolved: GalleryRoomConfig = {
+    ...room,
+    rooms,
+  };
+
+  for (let pass = 0; pass < room.roomCount; pass += 1) {
+    doors.forEach((door) => {
+      const center = getAttachedRoomCenter(resolved, customWalls, door);
+
+      if (!center || door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
+        return;
+      }
+
+      rooms[door.connectsToRoomIndex] = {
+        ...rooms[door.connectsToRoomIndex],
+        ...center,
+      };
+    });
+  }
+
+  return resolved;
+}
+
 function getConnectedRoomWallTarget(
   room: GalleryRoomConfig,
   customWalls: GalleryCustomWall[],
@@ -356,6 +431,46 @@ function getBuiltWallOpenings(
   });
 
   return openings;
+}
+
+function layoutOverlapsDoorOpening(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  doors: GalleryDoor[],
+  layout: GalleryFrameLayout,
+  frameWidth: number,
+  frameHeight: number,
+) {
+  const built = parseBuiltWallTarget(layout.wall);
+  const openings = built
+    ? getBuiltWallOpenings(room, customWalls, doors, built.roomIndex, built.wall)
+    : doors
+        .filter((door) => door.wall === layout.wall)
+        .map((door) => ({
+          id: door.id,
+          offset: door.offset,
+          width: door.width,
+          height: door.height,
+        }));
+
+  const frameLeft = layout.offset - frameWidth / 2;
+  const frameRight = layout.offset + frameWidth / 2;
+  const frameBottom = layout.height - frameHeight / 2;
+  const frameTop = layout.height + frameHeight / 2;
+
+  return openings.some((opening) => {
+    const openingLeft = opening.offset - opening.width / 2 - 0.35;
+    const openingRight = opening.offset + opening.width / 2 + 0.35;
+    const openingBottom = 0;
+    const openingTop = opening.height + 0.35;
+
+    return (
+      frameRight > openingLeft &&
+      frameLeft < openingRight &&
+      frameTop > openingBottom &&
+      frameBottom < openingTop
+    );
+  });
 }
 
 function getRoomIndexAtWorldX(room: GalleryRoomConfig, worldX: number) {
@@ -556,7 +671,7 @@ function PlayerMovement({
 
         const targetEntry = getRoomBoundaryEntryPoint(room, door.connectsToRoomIndex, doorPoint);
         const sourceEntry = getDoorInnerPoint(room, customWalls, door);
-        const threshold = Math.max(1.05, door.width * 0.64);
+        const threshold = Math.max(1.45, door.width * 0.9);
 
         if (door.roomIndex === currentRoomIndex && sourceEntry) {
           const sourceDistance = Math.hypot(
@@ -2326,6 +2441,7 @@ function Artwork({
   layout,
   room,
   customWalls,
+  doors,
   isSelected,
   isEditable,
   editorViewMode,
@@ -2335,6 +2451,7 @@ function Artwork({
   layout: GalleryFrameLayout;
   room: GalleryRoomConfig;
   customWalls: GalleryCustomWall[];
+  doors: GalleryDoor[];
   isSelected: boolean;
   isEditable: boolean;
   editorViewMode: EditorViewMode;
@@ -2359,7 +2476,7 @@ function Artwork({
     texture.anisotropy = 8;
   }, [texture]);
 
-  if (!mount) {
+  if (!mount || layoutOverlapsDoorOpening(room, customWalls, doors, layout, width + 0.34, height + 0.34)) {
     return null;
   }
 
@@ -2413,7 +2530,17 @@ function Artwork({
   );
 }
 
-function EmptyFrames({ count, room }: { count: number; room: GalleryRoomConfig }) {
+function EmptyFrames({
+  count,
+  room,
+  customWalls,
+  doors,
+}: {
+  count: number;
+  room: GalleryRoomConfig;
+  customWalls: GalleryCustomWall[];
+  doors: GalleryDoor[];
+}) {
   const frames = Array.from({ length: count }, (_, index) => {
     const wall = wallOrder[Math.floor(index / 3) % wallOrder.length];
     const slot = index % 3;
@@ -2429,6 +2556,19 @@ function EmptyFrames({ count, room }: { count: number; room: GalleryRoomConfig }
   return (
     <>
       {frames.map((layout, index) => {
+        if (
+          layoutOverlapsDoorOpening(
+            room,
+            customWalls,
+            doors,
+            { ...layout, width: 2.8 },
+            2.8,
+            2,
+          )
+        ) {
+          return null;
+        }
+
         const mount = getWallMount(room, layout.wall);
 
         return (
@@ -2481,6 +2621,10 @@ export default function GalleryScene({
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
   const useTopdownEditor = isEditMode && editorViewMode === "topdown";
+  const sceneRoomConfig = useMemo(
+    () => getRoomConfigWithDoorAttachments(roomConfig, customWalls, doors),
+    [customWalls, doors, roomConfig],
+  );
   const selectedWallForDrag =
     useTopdownEditor && transformTool === "move" && selectedWallId
       ? customWalls.find((wall) => wall.id === selectedWallId) ?? null
@@ -2495,17 +2639,17 @@ export default function GalleryScene({
       <color attach="background" args={["#151515"]} />
       <fog attach="fog" args={["#151515", 20, 42]} />
       <ambientLight intensity={0.38} />
-      <directionalLight position={[3, roomConfig.height + 3, 5]} intensity={0.8} castShadow />
+      <directionalLight position={[3, sceneRoomConfig.height + 3, 5]} intensity={0.8} castShadow />
       <spotLight
-        position={[0, roomConfig.height - 0.35, 0]}
+        position={[0, sceneRoomConfig.height - 0.35, 0]}
         angle={0.95}
         penumbra={0.6}
         intensity={1.2}
       />
-      {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
+      {Array.from({ length: sceneRoomConfig.roomCount }, (_, roomIndex) => (
         <Room
           key={roomIndex}
-          room={roomConfig}
+          room={sceneRoomConfig}
           roomIndex={roomIndex}
           customWalls={customWalls}
           isEditMode={isEditMode}
@@ -2523,7 +2667,7 @@ export default function GalleryScene({
         <CustomWall
           key={wall.id}
           wall={wall}
-          room={roomConfig}
+          room={sceneRoomConfig}
           isEditMode={isEditMode}
           isSelected={selectedWallId === wall.id}
           editorViewMode={editorViewMode}
@@ -2538,22 +2682,22 @@ export default function GalleryScene({
         <>
           <SelectedWallDragSurface
             wall={selectedWallForDrag}
-            room={roomConfig}
+            room={sceneRoomConfig}
             onUpdateCustomWall={onUpdateCustomWall}
           />
           <SelectedWallDomDrag
             wall={selectedWallForDrag}
-            room={roomConfig}
+            room={sceneRoomConfig}
             onUpdateCustomWall={onUpdateCustomWall}
           />
         </>
       ) : null}
-      <DoorConnections room={roomConfig} customWalls={customWalls} doors={doors} />
+      <DoorConnections room={sceneRoomConfig} customWalls={customWalls} doors={doors} />
       {doors.map((door) => (
         <Door
           key={door.id}
           door={door}
-          room={roomConfig}
+          room={sceneRoomConfig}
           customWalls={customWalls}
           isEditMode={isEditMode}
           isSelected={isEditMode && selectedDoorId === door.id}
@@ -2569,9 +2713,10 @@ export default function GalleryScene({
           <Artwork
             key={image.id}
             image={image}
-            layout={layouts[image.id] ?? getDefaultLayout(image, index, roomConfig)}
-            room={roomConfig}
+            layout={layouts[image.id] ?? getDefaultLayout(image, index, sceneRoomConfig)}
+            room={sceneRoomConfig}
             customWalls={customWalls}
+            doors={doors}
             isSelected={isEditMode && selectedImageId === image.id}
             isEditable={isEditMode}
             editorViewMode={editorViewMode}
@@ -2579,15 +2724,15 @@ export default function GalleryScene({
           />
         ))
       ) : (
-        <EmptyFrames count={6} room={roomConfig} />
+        <EmptyFrames count={6} room={sceneRoomConfig} customWalls={customWalls} doors={doors} />
       )}
       {useTopdownEditor ? (
         <>
-          <EditorCameraControls room={roomConfig} />
+          <EditorCameraControls room={sceneRoomConfig} />
           <TopdownBuilderPlacementTracker
             isEditMode={isEditMode}
             editorViewMode={editorViewMode}
-            room={roomConfig}
+            room={sceneRoomConfig}
             onBuilderPlacementChange={onBuilderPlacementChange}
           />
         </>
@@ -2598,7 +2743,7 @@ export default function GalleryScene({
             mouseSensitivity={editorSettings.mouseSensitivity}
           />
           <PlayerMovement
-            room={roomConfig}
+            room={sceneRoomConfig}
             settings={editorSettings}
             doors={doors}
             customWalls={customWalls}
@@ -2609,7 +2754,7 @@ export default function GalleryScene({
                 isEditMode={isEditMode}
                 editorViewMode={editorViewMode}
                 pendingPlacementImageId={pendingPlacementImageId}
-                room={roomConfig}
+                room={sceneRoomConfig}
                 customWalls={customWalls}
                 onSelectImage={onSelectImage}
                 onSelectWall={onSelectWall}
@@ -2620,7 +2765,7 @@ export default function GalleryScene({
                 onBuilderPlacementChange={onBuilderPlacementChange}
               />
               <FirstPersonAimFollower
-                room={roomConfig}
+                room={sceneRoomConfig}
                 customWalls={customWalls}
                 layouts={layouts}
                 doors={doors}
