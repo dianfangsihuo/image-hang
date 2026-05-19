@@ -2371,11 +2371,28 @@ function CustomWall({
       rotation={[0, wall.rotation, 0]}
     >
       {isSelected ? (
-        <mesh position={[0, 0, 0]}>
+        <mesh position={[0, 0, 0]} raycast={() => null}>
           <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, customWallDepth + 0.08]} />
           <meshBasicMaterial color="#f6c453" transparent opacity={0.28} />
         </mesh>
       ) : null}
+      <mesh
+        position={[0, 0, wallSurfaceOffset + 0.006]}
+        onClick={(event) => handleClick(event, frontTarget)}
+        userData={{ editableTarget: frontTarget }}
+      >
+        <planeGeometry args={[wall.length, wall.height]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
+      <mesh
+        position={[0, 0, -wallSurfaceOffset - 0.006]}
+        rotation={[0, Math.PI, 0]}
+        onClick={(event) => handleClick(event, backTarget)}
+        userData={{ editableTarget: backTarget }}
+      >
+        <planeGeometry args={[wall.length, wall.height]} />
+        <meshBasicMaterial transparent opacity={0} depthWrite={false} side={THREE.DoubleSide} />
+      </mesh>
       {wallPieces.map((piece) => (
         <group key={piece.key} position={[piece.x, piece.y, 0]}>
           <mesh
@@ -2386,6 +2403,7 @@ function CustomWall({
             onPointerCancel={stopDrag}
             receiveShadow
             castShadow
+            raycast={() => null}
           >
             <boxGeometry args={[piece.width, piece.height, customWallDepth]} />
             <meshStandardMaterial color={isSelected ? "#e7dbc0" : "#ded7c8"} roughness={0.82} />
