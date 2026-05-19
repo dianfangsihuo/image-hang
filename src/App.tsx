@@ -95,6 +95,8 @@ const wallLabels: Record<GalleryWall, string> = {
 
 const builtWallOptions = Object.entries(wallLabels) as Array<[GalleryWall, string]>;
 const roomGap = 0.18;
+const frameOuterPadding = 0.28;
+const frameWallMargin = 0.18;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -211,8 +213,74 @@ function getWallOffsetLimit(
 }
 
 function getDefaultFrameWidth(image: GalleryImage) {
-  const aspect = image.width / image.height || 1.42;
+  const aspect = getImageAspect(image);
   return Math.min(3.4, Math.max(2.15, aspect * 2.15));
+}
+
+function getImageAspect(image: GalleryImage) {
+  const aspect = image.width / image.height;
+  return Number.isFinite(aspect) && aspect > 0 ? aspect : 1.42;
+}
+
+function getFrameLayoutConstraints(
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+  wall: GalleryWallTarget,
+  image: GalleryImage,
+) {
+  const aspect = getImageAspect(image);
+  const wallLength = getWallTargetLength(room, customWalls, wall);
+  const wallHeight = getWallTargetHeight(room, customWalls, wall);
+  const maxByLength = Math.max(0.7, wallLength - frameOuterPadding - frameWallMargin * 2);
+  const maxByHeight = Math.max(0.7, (wallHeight - frameOuterPadding - frameWallMargin * 2) * aspect);
+  const maxWidth = Math.max(0.65, Math.min(5, maxByLength, maxByHeight));
+  const minWidth = Math.min(1.2, maxWidth);
+
+  return {
+    aspect,
+    minWidth,
+    maxWidth,
+  };
+}
+
+function normalizeFrameLayout(
+  image: GalleryImage,
+  layout: GalleryFrameLayout,
+  room: GalleryRoomConfig,
+  customWalls: GalleryCustomWall[],
+) {
+  const constraints = getFrameLayoutConstraints(room, customWalls, layout.wall, image);
+  const width = clamp(layout.width, constraints.minWidth, constraints.maxWidth);
+  const artworkHeight = width / constraints.aspect;
+  const frameOuterWidth = width + frameOuterPadding;
+  const frameOuterHeight = artworkHeight + frameOuterPadding;
+  const wallLength = getWallTargetLength(room, customWalls, layout.wall);
+  const wallHeight = getWallTargetHeight(room, customWalls, layout.wall);
+  const offsetLimit = Math.max(0, wallLength / 2 - frameOuterWidth / 2 - frameWallMargin);
+  const minHeight = Math.min(
+    wallHeight / 2,
+    frameOuterHeight / 2 + frameWallMargin,
+  );
+  const maxHeight = Math.max(
+    minHeight,
+    wallHeight - frameOuterHeight / 2 - frameWallMargin,
+  );
+
+  return {
+    ...layout,
+    offset: clamp(layout.offset, -offsetLimit, offsetLimit),
+    height: clamp(layout.height, minHeight, maxHeight),
+    width,
+  };
+}
+
+function layoutChanged(a: GalleryFrameLayout, b: GalleryFrameLayout) {
+  return (
+    a.wall !== b.wall ||
+    Math.abs(a.offset - b.offset) > 0.001 ||
+    Math.abs(a.height - b.height) > 0.001 ||
+    Math.abs(a.width - b.width) > 0.001
+  );
 }
 
 function formatKeyCode(code: string) {
@@ -270,8 +338,7 @@ function calculateGalleryCapacity(
       : 3;
   const averageAspect =
     images.length > 0
-      ? images.reduce((sum, image) => sum + (image.width / image.height || 1.42), 0) /
-        images.length
+      ? images.reduce((sum, image) => sum + getImageAspect(image), 0) / images.length
       : 1.42;
   const averageHeight = averageWidth / averageAspect;
   const builtinTargets = Array.from({ length: room.roomCount }, (_, roomIndex) =>
@@ -338,8 +405,17 @@ function App() {
   const selectedImage = selectedIndex >= 0 ? sceneImages[selectedIndex] : undefined;
   const selectedLayout =
     selectedImage &&
-    (layouts[selectedImage.id] ??
-      getDefaultLayout(selectedImage, Math.max(selectedIndex, 0), roomConfig));
+    normalizeFrameLayout(
+      selectedImage,
+      layouts[selectedImage.id] ??
+        getDefaultLayout(selectedImage, Math.max(selectedIndex, 0), roomConfig),
+      roomConfig,
+      customWalls,
+    );
+  const selectedLayoutConstraints =
+    selectedImage && selectedLayout
+      ? getFrameLayoutConstraints(roomConfig, customWalls, selectedLayout.wall, selectedImage)
+      : null;
   const capacity = useMemo(
     () => calculateGalleryCapacity(roomConfig, customWalls, sceneImages, layouts),
     [customWalls, layouts, roomConfig, sceneImages],
@@ -438,6 +514,33 @@ function App() {
   useEffect(() => {
     saveStoredEditorSettings(editorSettings);
   }, [editorSettings]);
+
+  useEffect(() => {
+    if (sceneImages.length === 0) {
+      return;
+    }
+
+    setLayouts((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      sceneImages.forEach((image) => {
+        const currentLayout = current[image.id];
+        if (!currentLayout) {
+          return;
+        }
+
+        const normalized = normalizeFrameLayout(image, currentLayout, roomConfig, customWalls);
+
+        if (layoutChanged(currentLayout, normalized)) {
+          changed = true;
+          next[image.id] = normalized;
+        }
+      });
+
+      return changed ? next : current;
+    });
+  }, [customWalls, roomConfig, sceneImages]);
 
   useEffect(() => {
     if (mode !== "edit" || editorViewMode !== "firstPerson" || transformTool !== "move") {
@@ -577,23 +680,26 @@ function App() {
       return;
     }
 
-    const currentLayout =
-      layouts[id] ?? getDefaultLayout(image, Math.max(imageIndex, 0), roomConfig);
-    const wall = patch.wall ?? currentLayout.wall;
-    const limit = getWallOffsetLimit(roomConfig, customWalls, wall);
-    const wallHeight = getWallTargetHeight(roomConfig, customWalls, wall);
+    setLayouts((current) => {
+      const currentLayout =
+        current[id] ?? layouts[id] ?? getDefaultLayout(image, Math.max(imageIndex, 0), roomConfig);
+      const wall = patch.wall ?? currentLayout.wall;
+      const nextLayout = normalizeFrameLayout(
+        image,
+        {
+          ...currentLayout,
+          ...patch,
+          wall,
+        },
+        roomConfig,
+        customWalls,
+      );
 
-    setLayouts((current) => ({
-      ...current,
-      [id]: {
-        ...currentLayout,
-        ...patch,
-        wall,
-        offset: clamp(patch.offset ?? currentLayout.offset, -limit, limit),
-        height: clamp(patch.height ?? currentLayout.height, 1.1, wallHeight - 1.15),
-        width: clamp(patch.width ?? currentLayout.width, 1.2, 5),
-      },
-    }));
+      return {
+        ...current,
+        [id]: nextLayout,
+      };
+    });
   }
 
   function updateRoomConfig(patch: Partial<GalleryRoomConfig & GalleryRoomDimensions>) {
@@ -623,16 +729,14 @@ function App() {
       setLayouts((currentLayouts) =>
         Object.fromEntries(
           Object.entries(currentLayouts).map(([id, layout]) => {
-            const limit = getWallOffsetLimit(next, customWalls, layout.wall);
-            const wallHeight = getWallTargetHeight(next, customWalls, layout.wall);
+            const image = sceneImages.find((item) => item.id === id);
+            const normalized = image
+              ? normalizeFrameLayout(image, layout, next, customWalls)
+              : layout;
 
             return [
               id,
-              {
-                ...layout,
-                offset: clamp(layout.offset, -limit, limit),
-                height: clamp(layout.height, 1.1, wallHeight - 1.15),
-              },
+              normalized,
             ];
           }),
         ),
@@ -1173,14 +1277,21 @@ function App() {
       return;
     }
 
-    setLayouts((current) => ({
-      ...current,
-      [imageId]: {
+    const layout = normalizeFrameLayout(
+      image,
+      {
         wall,
-        offset: clamp(offset, -getWallOffsetLimit(roomConfig, customWalls, wall), getWallOffsetLimit(roomConfig, customWalls, wall)),
-        height: clamp(height, 1.1, getWallTargetHeight(roomConfig, customWalls, wall) - 1.15),
+        offset,
+        height,
         width: getDefaultFrameWidth(image),
       },
+      roomConfig,
+      customWalls,
+    );
+
+    setLayouts((current) => ({
+      ...current,
+      [imageId]: layout,
     }));
     setPendingPlacementIds((current) => current.slice(1));
     selectArtwork(imageId);
@@ -1646,8 +1757,22 @@ function App() {
                       <span>横向位置 {selectedLayout.offset.toFixed(1)}</span>
                       <input
                         type="range"
-                        min={-getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
-                        max={getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)}
+                        min={
+                          selectedLayoutConstraints
+                            ? -(
+                                getWallTargetLength(roomConfig, customWalls, selectedLayout.wall) / 2 -
+                                (selectedLayout.width + frameOuterPadding) / 2 -
+                                frameWallMargin
+                              )
+                            : -getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)
+                        }
+                        max={
+                          selectedLayoutConstraints
+                            ? getWallTargetLength(roomConfig, customWalls, selectedLayout.wall) / 2 -
+                              (selectedLayout.width + frameOuterPadding) / 2 -
+                              frameWallMargin
+                            : getWallOffsetLimit(roomConfig, customWalls, selectedLayout.wall)
+                        }
                         step="0.1"
                         value={selectedLayout.offset}
                         onChange={(event) =>
@@ -1659,10 +1784,24 @@ function App() {
                       <span>高度 {selectedLayout.height.toFixed(1)}</span>
                       <input
                         type="range"
-                        min="1.1"
+                        min={
+                          selectedLayoutConstraints
+                            ? Math.min(
+                                getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) / 2,
+                                selectedLayout.width / selectedLayoutConstraints.aspect / 2 +
+                                  frameOuterPadding / 2 +
+                                  frameWallMargin,
+                              )
+                            : 1.1
+                        }
                         max={Math.max(
                           1.2,
-                          getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) - 1.15,
+                          selectedLayoutConstraints
+                            ? getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) -
+                                selectedLayout.width / selectedLayoutConstraints.aspect / 2 -
+                                frameOuterPadding / 2 -
+                                frameWallMargin
+                            : getWallTargetHeight(roomConfig, customWalls, selectedLayout.wall) - 1.15,
                         )}
                         step="0.1"
                         value={selectedLayout.height}
@@ -1679,8 +1818,8 @@ function App() {
                     <span>大小 {selectedLayout.width.toFixed(1)}</span>
                     <input
                       type="range"
-                      min="1.2"
-                      max="5"
+                      min={selectedLayoutConstraints?.minWidth ?? 1.2}
+                      max={selectedLayoutConstraints?.maxWidth ?? 5}
                       step="0.1"
                       value={selectedLayout.width}
                       onChange={(event) =>

@@ -2904,20 +2904,20 @@ function Artwork({
           {isSelected ? (
             <group position={[0, 0, artworkFrameDepth + 0.012]}>
               <mesh position={[0, frameOuterHeight / 2 + selectionSize / 2, 0]}>
-                <boxGeometry args={[frameOuterWidth + selectionSize * 2, selectionSize, 0.014]} />
-                <meshBasicMaterial color="#f6c453" />
+                <planeGeometry args={[frameOuterWidth + selectionSize * 2, selectionSize]} />
+                <meshBasicMaterial color="#f6c453" side={THREE.DoubleSide} />
               </mesh>
               <mesh position={[0, -frameOuterHeight / 2 - selectionSize / 2, 0]}>
-                <boxGeometry args={[frameOuterWidth + selectionSize * 2, selectionSize, 0.014]} />
-                <meshBasicMaterial color="#f6c453" />
+                <planeGeometry args={[frameOuterWidth + selectionSize * 2, selectionSize]} />
+                <meshBasicMaterial color="#f6c453" side={THREE.DoubleSide} />
               </mesh>
               <mesh position={[-frameOuterWidth / 2 - selectionSize / 2, 0, 0]}>
-                <boxGeometry args={[selectionSize, frameOuterHeight + selectionSize * 2, 0.014]} />
-                <meshBasicMaterial color="#f6c453" />
+                <planeGeometry args={[selectionSize, frameOuterHeight + selectionSize * 2]} />
+                <meshBasicMaterial color="#f6c453" side={THREE.DoubleSide} />
               </mesh>
               <mesh position={[frameOuterWidth / 2 + selectionSize / 2, 0, 0]}>
-                <boxGeometry args={[selectionSize, frameOuterHeight + selectionSize * 2, 0.014]} />
-                <meshBasicMaterial color="#f6c453" />
+                <planeGeometry args={[selectionSize, frameOuterHeight + selectionSize * 2]} />
+                <meshBasicMaterial color="#f6c453" side={THREE.DoubleSide} />
               </mesh>
             </group>
           ) : null}
