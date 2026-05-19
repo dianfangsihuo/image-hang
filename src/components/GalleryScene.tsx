@@ -1926,13 +1926,13 @@ function FirstPersonEditorPicker({
 
       if (target.kind === "customWall") {
         const wall = customWalls.find((item) => item.id === target.id);
-        const local = hit.object.worldToLocal(hit.point.clone());
+        const basis = getWallBasis(room, target.wall, customWalls);
 
-        if (wall) {
+        if (wall && basis) {
           return getPlacementFromWorldPoint(room, basePoint, {
             wall: target.wall,
-            wallOffset: local.x,
-            wallHeight: clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
+            wallOffset: hit.point.clone().sub(basis.position).dot(basis.axis),
+            wallHeight: clamp(hit.point.y, 1.1, wall.height - 0.45),
             label: wall.name,
           });
         }
@@ -1981,16 +1981,15 @@ function FirstPersonEditorPicker({
     }
 
     const wall = customWalls.find((item) => item.id === target.id);
-    if (!wall) {
+    const basis = getWallBasis(room, target.wall, customWalls);
+    if (!wall || !basis) {
       return false;
     }
 
-    const local = hit.object.worldToLocal(hit.point.clone());
-
     onPlaceImageOnWall(
       target.wall,
-      local.x,
-      clamp(local.y + wall.height / 2, 1.1, wall.height - 0.45),
+      hit.point.clone().sub(basis.position).dot(basis.axis),
+      clamp(hit.point.y, 1.1, wall.height - 0.45),
     );
     return true;
   }
@@ -2372,7 +2371,7 @@ function CustomWall({
       rotation={[0, wall.rotation, 0]}
     >
       {isSelected ? (
-        <mesh position={[0, 0, 0]} onClick={(event) => handleClick(event)} userData={{ editableTarget: frontTarget }}>
+        <mesh position={[0, 0, 0]}>
           <boxGeometry args={[wall.length + 0.28, wall.height + 0.18, customWallDepth + 0.08]} />
           <meshBasicMaterial color="#f6c453" transparent opacity={0.28} />
         </mesh>
@@ -2387,7 +2386,6 @@ function CustomWall({
             onPointerCancel={stopDrag}
             receiveShadow
             castShadow
-            userData={{ editableTarget: frontTarget }}
           >
             <boxGeometry args={[piece.width, piece.height, customWallDepth]} />
             <meshStandardMaterial color={isSelected ? "#e7dbc0" : "#ded7c8"} roughness={0.82} />
@@ -2838,7 +2836,7 @@ function Artwork({
   const frameOuterWidth = width + 0.28;
   const frameOuterHeight = height + 0.28;
   const selectionSize = 0.045;
-  const artworkZ = customTarget ? 0.004 : 0;
+  const artworkZ = customTarget ? -0.004 : 0;
 
   useMemo(() => {
     texture.colorSpace = THREE.SRGBColorSpace;
