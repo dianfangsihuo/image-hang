@@ -67,6 +67,15 @@ type WallOpening = {
   height: number;
 };
 
+type DoorPassage = {
+  door: GalleryDoor;
+  sourceRoomIndex: number;
+  targetRoomIndex: number;
+  start: THREE.Vector3;
+  end: THREE.Vector3;
+  width: number;
+};
+
 const fallbackRoom: GalleryRoomConfig = {
   width: 18,
   depth: 22,
@@ -266,6 +275,50 @@ function getRoomBoundaryEntryPoint(
   return { boundary, inside };
 }
 
+function getRoomWalkBounds(room: GalleryRoomConfig, roomIndex: number, margin = 0.52) {
+  const center = getRoomCenter(room, roomIndex);
+  const dimensions = getRoomDimensions(room, roomIndex);
+
+  return {
+    roomIndex,
+    minX: center.x - dimensions.width / 2 + margin,
+    maxX: center.x + dimensions.width / 2 - margin,
+    minZ: center.z - dimensions.depth / 2 + margin,
+    maxZ: center.z + dimensions.depth / 2 - margin,
+  };
+}
+
+function pointInRoomWalkBounds(
+  room: GalleryRoomConfig,
+  roomIndex: number,
+  point: THREE.Vector3,
+  margin = 0.52,
+) {
+  const bounds = getRoomWalkBounds(room, roomIndex, margin);
+
+  return (
+    point.x >= bounds.minX &&
+    point.x <= bounds.maxX &&
+    point.z >= bounds.minZ &&
+    point.z <= bounds.maxZ
+  );
+}
+
+function closestPointInRoomWalkBounds(
+  room: GalleryRoomConfig,
+  roomIndex: number,
+  point: THREE.Vector3,
+  margin = 0.52,
+) {
+  const bounds = getRoomWalkBounds(room, roomIndex, margin);
+
+  return new THREE.Vector3(
+    clamp(point.x, bounds.minX, bounds.maxX),
+    point.y,
+    clamp(point.z, bounds.minZ, bounds.maxZ),
+  );
+}
+
 function getDoorInnerPoint(
   room: GalleryRoomConfig,
   customWalls: GalleryCustomWall[],
@@ -284,79 +337,56 @@ function getDoorInnerPoint(
     .addScaledVector(basis.normal, inset);
 }
 
-function getAttachedRoomCenter(
+function getDoorPassage(
   room: GalleryRoomConfig,
   customWalls: GalleryCustomWall[],
   door: GalleryDoor,
-) {
-  if (door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
+): DoorPassage | null {
+  if (!door.isOpen || door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
     return null;
   }
 
-  if (door.connectsToRoomIndex === door.roomIndex) {
+  const doorPoint = getDoorWorldPosition(room, customWalls, door);
+  const sourceEntry = getDoorInnerPoint(room, customWalls, door, 0.72);
+
+  if (!doorPoint || !sourceEntry) {
     return null;
   }
 
-  const built = parseBuiltWallTarget(door.wall);
-  if (!built) {
-    return null;
-  }
-
-  const basis = getWallBasis(room, door.wall, customWalls, 0);
-  if (!basis) {
-    return null;
-  }
-
-  const targetRoom = getRoomDimensions(room, door.connectsToRoomIndex);
-  const normalExtent =
-    built.wall === "north" || built.wall === "south"
-      ? targetRoom.depth / 2
-      : targetRoom.width / 2;
-  const doorway = basis.position.clone().addScaledVector(basis.axis, door.offset);
-  const center = doorway.addScaledVector(basis.normal, -normalExtent);
+  const targetEntry = getRoomBoundaryEntryPoint(room, door.connectsToRoomIndex, doorPoint, 0.72);
 
   return {
-    x: center.x,
-    z: center.z,
+    door,
+    sourceRoomIndex: door.roomIndex,
+    targetRoomIndex: door.connectsToRoomIndex,
+    start: sourceEntry,
+    end: targetEntry.inside,
+    width: Math.max(1.35, door.width * 0.92),
   };
 }
 
-function getRoomConfigWithDoorAttachments(
-  room: GalleryRoomConfig,
-  customWalls: GalleryCustomWall[],
-  doors: GalleryDoor[],
-) {
-  const rooms = Array.from({ length: room.roomCount }, (_, roomIndex) => {
-    const dimensions = getRoomDimensions(room, roomIndex);
-    const center = getRoomCenter(room, roomIndex);
+function closestPointInPassage(passage: DoorPassage, point: THREE.Vector3) {
+  const segment = passage.end.clone().sub(passage.start);
+  const lengthSq = segment.lengthSq();
 
-    return {
-      ...dimensions,
-      x: center.x,
-      z: center.z,
-    };
-  });
-  const resolved: GalleryRoomConfig = {
-    ...room,
-    rooms,
-  };
-
-  for (let pass = 0; pass < room.roomCount; pass += 1) {
-    doors.forEach((door) => {
-      const center = getAttachedRoomCenter(resolved, customWalls, door);
-
-      if (!center || door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
-        return;
-      }
-
-      rooms[door.connectsToRoomIndex] = {
-        ...rooms[door.connectsToRoomIndex],
-        ...center,
-      };
-    });
+  if (lengthSq < 0.0001) {
+    return passage.start.clone();
   }
 
-  return resolved;
+  const relative = point.clone().sub(passage.start);
+  const t = clamp(relative.dot(segment) / lengthSq, 0, 1);
+  const center = passage.start.clone().addScaledVector(segment, t);
+  const axis = segment.normalize();
+  const side = new THREE.Vector3(-axis.z, 0, axis.x);
+  const lateral = clamp(relative.dot(side), -passage.width / 2, passage.width / 2);
+
+  return center.addScaledVector(side, lateral);
+}
+
+function pointInPassage(passage: DoorPassage, point: THREE.Vector3) {
+  const closest = closestPointInPassage(passage, point);
+
+  return Math.hypot(point.x - closest.x, point.z - closest.z) < 0.08;
 }
 
 function getConnectedRoomWallTarget(
@@ -577,7 +607,6 @@ function PlayerMovement({
   const forward = useMemo(() => new THREE.Vector3(), []);
   const right = useMemo(() => new THREE.Vector3(), []);
   const currentRoomIndexRef = useRef(0);
-  const lastDoorTeleport = useRef(0);
 
   useEffect(() => {
     camera.position.set(0, eyeHeight, 7);
@@ -678,70 +707,62 @@ function PlayerMovement({
     }
 
     currentRoomIndexRef.current = clamp(currentRoomIndexRef.current, 0, room.roomCount - 1);
-    let currentRoomIndex = currentRoomIndexRef.current;
-    const now = performance.now();
+    const currentRoomIndex = currentRoomIndexRef.current;
+    const passages = doors
+      .map((door) => getDoorPassage(room, customWalls, door))
+      .filter((passage): passage is DoorPassage => Boolean(passage));
+    const relatedPassages = passages.filter(
+      (passage) =>
+        passage.sourceRoomIndex === currentRoomIndex ||
+        passage.targetRoomIndex === currentRoomIndex ||
+        pointInPassage(passage, camera.position),
+    );
+    const allowedRoomIndexes = new Set([currentRoomIndex]);
 
-    if (now - lastDoorTeleport.current > 850) {
-      for (const door of doors) {
-        if (!door.isOpen || door.connectsToRoomIndex === null || door.connectsToRoomIndex === undefined) {
-          continue;
-        }
+    relatedPassages.forEach((passage) => {
+      allowedRoomIndexes.add(passage.sourceRoomIndex);
+      allowedRoomIndexes.add(passage.targetRoomIndex);
+    });
 
-        const doorPoint = getDoorWorldPosition(room, customWalls, door);
-        if (!doorPoint) {
-          continue;
-        }
+    const isInAllowedRoom = Array.from(allowedRoomIndexes).some((roomIndex) =>
+      pointInRoomWalkBounds(room, roomIndex, camera.position),
+    );
+    const isInAllowedPassage = relatedPassages.some((passage) => pointInPassage(passage, camera.position));
 
-        const targetEntry = getRoomBoundaryEntryPoint(room, door.connectsToRoomIndex, doorPoint);
-        const sourceEntry = getDoorInnerPoint(room, customWalls, door);
-        const threshold = Math.max(1.45, door.width * 0.9);
+    if (!isInAllowedRoom && !isInAllowedPassage) {
+      const candidates = [
+        ...Array.from(allowedRoomIndexes).map((roomIndex) =>
+          closestPointInRoomWalkBounds(room, roomIndex, camera.position),
+        ),
+        ...relatedPassages.map((passage) => closestPointInPassage(passage, camera.position)),
+      ];
+      const closest = candidates.reduce((best, candidate) => {
+        const bestDistance = Math.hypot(camera.position.x - best.x, camera.position.z - best.z);
+        const candidateDistance = Math.hypot(
+          camera.position.x - candidate.x,
+          camera.position.z - candidate.z,
+        );
 
-        if (door.roomIndex === currentRoomIndex && sourceEntry) {
-          const sourceDistance = Math.hypot(
-            camera.position.x - sourceEntry.x,
-            camera.position.z - sourceEntry.z,
-          );
+        return candidateDistance < bestDistance ? candidate : best;
+      }, candidates[0]);
 
-          if (sourceDistance <= threshold) {
-            camera.position.set(targetEntry.inside.x, eyeHeight, targetEntry.inside.z);
-            currentRoomIndexRef.current = door.connectsToRoomIndex;
-            currentRoomIndex = door.connectsToRoomIndex;
-            lastDoorTeleport.current = now;
-            keys.current.clear();
-            break;
-          }
-        }
-
-        if (door.connectsToRoomIndex === currentRoomIndex) {
-          const targetDistance = Math.hypot(
-            camera.position.x - targetEntry.inside.x,
-            camera.position.z - targetEntry.inside.z,
-          );
-
-          if (targetDistance <= threshold && sourceEntry) {
-            camera.position.set(sourceEntry.x, eyeHeight, sourceEntry.z);
-            currentRoomIndexRef.current = door.roomIndex;
-            currentRoomIndex = door.roomIndex;
-            lastDoorTeleport.current = now;
-            keys.current.clear();
-            break;
-          }
-        }
+      if (closest) {
+        camera.position.x = closest.x;
+        camera.position.z = closest.z;
       }
     }
 
-    const currentRoom = getRoomDimensions(room, currentRoomIndex);
-    const currentCenter = getRoomCenter(room, currentRoomIndex);
-    camera.position.x = THREE.MathUtils.clamp(
-      camera.position.x,
-      currentCenter.x - currentRoom.width / 2 + 1.25,
-      currentCenter.x + currentRoom.width / 2 - 1.25,
-    );
-    camera.position.z = THREE.MathUtils.clamp(
-      camera.position.z,
-      currentCenter.z - currentRoom.depth / 2 + 1.25,
-      currentCenter.z + currentRoom.depth / 2 - 1.25,
-    );
+    for (const passage of relatedPassages) {
+      if (pointInRoomWalkBounds(room, passage.targetRoomIndex, camera.position, 0.7)) {
+        currentRoomIndexRef.current = passage.targetRoomIndex;
+        break;
+      }
+
+      if (pointInRoomWalkBounds(room, passage.sourceRoomIndex, camera.position, 0.7)) {
+        currentRoomIndexRef.current = passage.sourceRoomIndex;
+        break;
+      }
+    }
   });
 
   return null;
@@ -2739,10 +2760,7 @@ export default function GalleryScene({
 }: GallerySceneProps) {
   const isEditMode = mode === "edit";
   const useTopdownEditor = isEditMode && editorViewMode === "topdown";
-  const sceneRoomConfig = useMemo(
-    () => getRoomConfigWithDoorAttachments(roomConfig, customWalls, doors),
-    [customWalls, doors, roomConfig],
-  );
+  const sceneRoomConfig = roomConfig;
   const selectedWallForDrag =
     useTopdownEditor && transformTool === "move" && selectedWallId
       ? customWalls.find((wall) => wall.id === selectedWallId) ?? null
