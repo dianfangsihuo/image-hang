@@ -10,12 +10,72 @@ let grid;
 let statusLine;
 let autoStoreToggle;
 let openOnStartToggle;
+const layoutStorageKey = "image-hang-gallery-panel-layout";
+const defaultPanelLayout = {
+  width: 380,
+  height: 520,
+  top: 64,
+  left: null,
+};
 let settings = {
   autoStore: false,
   openOnStart: true,
   dedupeGenerated: true,
 };
 let knownFingerprints = new Set();
+
+function clamp(value, min, max) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function readPanelLayout() {
+  try {
+    return {
+      ...defaultPanelLayout,
+      ...(JSON.parse(localStorage.getItem(layoutStorageKey) || "{}") || {}),
+    };
+  } catch {
+    return { ...defaultPanelLayout };
+  }
+}
+
+function writePanelLayout(layout) {
+  localStorage.setItem(layoutStorageKey, JSON.stringify(layout));
+}
+
+function applyPanelLayout(layout) {
+  const minWidth = 260;
+  const minHeight = 240;
+  const margin = 12;
+  const maxWidth = Math.max(minWidth, window.innerWidth - margin * 2);
+  const maxHeight = Math.max(minHeight, window.innerHeight - margin * 2);
+  const width = clamp(Number(layout.width) || defaultPanelLayout.width, minWidth, maxWidth);
+  const height = clamp(Number(layout.height) || defaultPanelLayout.height, minHeight, maxHeight);
+  const leftFallback = window.innerWidth - width - 18;
+  const left = clamp(Number.isFinite(layout.left) ? layout.left : leftFallback, margin, window.innerWidth - width - margin);
+  const top = clamp(Number(layout.top) || defaultPanelLayout.top, margin, window.innerHeight - height - margin);
+
+  panel.style.width = `${width}px`;
+  panel.style.height = `${height}px`;
+  panel.style.left = `${left}px`;
+  panel.style.top = `${top}px`;
+  panel.style.right = "auto";
+
+  return { width, height, left, top };
+}
+
+function saveCurrentPanelLayout() {
+  if (!panel) {
+    return;
+  }
+
+  writePanelLayout({
+    width: panel.offsetWidth,
+    height: panel.offsetHeight,
+    left: panel.offsetLeft,
+    top: panel.offsetTop,
+  });
+}
 
 function imageFingerprint(image) {
   return JSON.stringify({
@@ -34,9 +94,30 @@ function setStatus(text) {
 async function fetchJson(url, options) {
   const response = await api.fetchApi(url, options);
   if (!response.ok) {
-    throw new Error(`${response.status} ${response.statusText}`);
+    const error = new Error(`${response.status} ${response.statusText}`);
+    error.status = response.status;
+    throw error;
   }
   return await response.json();
+}
+
+async function findRunningViewerUrl() {
+  for (let port = 5174; port < 5200; port += 1) {
+    const url = `http://127.0.0.1:${port}/`;
+    try {
+      const response = await fetch(url, {
+        cache: "no-store",
+        mode: "no-cors",
+      });
+      if (response) {
+        return url;
+      }
+    } catch {
+      // Try the next likely Vite port.
+    }
+  }
+
+  return null;
 }
 
 function injectStyle() {
@@ -67,7 +148,11 @@ function injectStyle() {
       top: 64px;
       right: 18px;
       width: min(380px, calc(100vw - 32px));
-      max-height: calc(100vh - 96px);
+      height: min(520px, calc(100vh - 96px));
+      min-width: 260px;
+      min-height: 240px;
+      max-width: calc(100vw - 24px);
+      max-height: calc(100vh - 24px);
       z-index: 9998;
       display: none;
       flex-direction: column;
@@ -79,6 +164,7 @@ function injectStyle() {
       background: rgba(30, 26, 22, .96);
       box-shadow: 0 18px 48px rgba(0,0,0,.42);
       font-family: system-ui, sans-serif;
+      box-sizing: border-box;
     }
 
     .image-hang-panel.open {
@@ -93,8 +179,21 @@ function injectStyle() {
       gap: 10px;
     }
 
+    .image-hang-head {
+      cursor: move;
+      user-select: none;
+      touch-action: none;
+    }
+
     .image-hang-head strong {
       font-size: 15px;
+    }
+
+    .image-hang-actions {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      flex-shrink: 0;
     }
 
     .image-hang-head button,
@@ -134,6 +233,7 @@ function injectStyle() {
       gap: 10px;
       overflow: auto;
       padding-right: 2px;
+      min-height: 0;
     }
 
     .image-hang-card {
@@ -175,6 +275,22 @@ function injectStyle() {
       background: rgba(143,48,38,.42);
       cursor: pointer;
     }
+
+    .image-hang-resize {
+      position: absolute;
+      right: 4px;
+      bottom: 4px;
+      width: 18px;
+      height: 18px;
+      border: 0;
+      padding: 0;
+      background:
+        linear-gradient(135deg, transparent 0 50%, rgba(234,220,201,.62) 50% 58%, transparent 58%),
+        linear-gradient(135deg, transparent 0 66%, rgba(234,220,201,.5) 66% 74%, transparent 74%);
+      cursor: nwse-resize;
+      opacity: .9;
+      touch-action: none;
+    }
   `;
   document.head.appendChild(style);
 }
@@ -195,7 +311,10 @@ function makePanel() {
   panel.innerHTML = `
     <div class="image-hang-head">
       <strong>Image Hang 画廊</strong>
-      <button type="button" data-action="refresh">刷新</button>
+      <div class="image-hang-actions">
+        <button type="button" data-action="open-viewer">进入画廊</button>
+        <button type="button" data-action="refresh">刷新</button>
+      </div>
     </div>
     <div class="image-hang-row">
       <label><input type="checkbox" data-setting="autoStore"> 自动收集生成图</label>
@@ -205,8 +324,10 @@ function makePanel() {
     </div>
     <div class="image-hang-status"></div>
     <div class="image-hang-grid"></div>
+    <button type="button" class="image-hang-resize" aria-label="调整画廊大小" title="拖动调整大小"></button>
   `;
   document.body.appendChild(panel);
+  applyPanelLayout(readPanelLayout());
 
   grid = panel.querySelector(".image-hang-grid");
   statusLine = panel.querySelector(".image-hang-status");
@@ -217,6 +338,42 @@ function makePanel() {
     void loadGallery();
   });
 
+  panel.querySelector('[data-action="open-viewer"]').addEventListener("click", async (event) => {
+    const button = event.currentTarget;
+    const previousText = button.textContent;
+    button.disabled = true;
+    button.textContent = "启动中...";
+
+    try {
+      let data;
+      try {
+        data = await fetchJson("/image-hang-gallery/launch-viewer");
+      } catch (error) {
+        if (error.status !== 404 && error.status !== 405) {
+          throw error;
+        }
+
+        const fallbackUrl = await findRunningViewerUrl();
+        if (!fallbackUrl) {
+          throw error;
+        }
+
+        data = { ok: true, url: fallbackUrl };
+      }
+
+      if (!data.ok || !data.url) {
+        throw new Error(data.error || "启动画廊失败");
+      }
+      window.open(data.url, "image-hang-gallery-viewer");
+      setStatus("画廊服务已启动");
+    } catch (error) {
+      setStatus(`启动画廊失败：${error.message || error}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = previousText;
+    }
+  });
+
   autoStoreToggle.addEventListener("change", () => {
     settings.autoStore = autoStoreToggle.checked;
     void saveSettings();
@@ -225,6 +382,83 @@ function makePanel() {
   openOnStartToggle.addEventListener("change", () => {
     settings.openOnStart = openOnStartToggle.checked;
     void saveSettings();
+  });
+
+  enablePanelDragAndResize();
+  window.addEventListener("resize", () => {
+    applyPanelLayout(readPanelLayout());
+    saveCurrentPanelLayout();
+  });
+}
+
+function enablePanelDragAndResize() {
+  const head = panel.querySelector(".image-hang-head");
+  const resizeHandle = panel.querySelector(".image-hang-resize");
+
+  head.addEventListener("pointerdown", (event) => {
+    if (event.target.closest("button")) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startLeft = panel.offsetLeft;
+    const startTop = panel.offsetTop;
+
+    const move = (moveEvent) => {
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      const margin = 12;
+      panel.style.left = `${clamp(startLeft + moveEvent.clientX - startX, margin, window.innerWidth - width - margin)}px`;
+      panel.style.top = `${clamp(startTop + moveEvent.clientY - startY, margin, window.innerHeight - height - margin)}px`;
+    };
+
+    const stop = () => {
+      document.removeEventListener("pointermove", move, true);
+      document.removeEventListener("pointerup", stop, true);
+      document.removeEventListener("pointercancel", stop, true);
+      saveCurrentPanelLayout();
+    };
+
+    document.addEventListener("pointermove", move, true);
+    document.addEventListener("pointerup", stop, true);
+    document.addEventListener("pointercancel", stop, true);
+  });
+
+  resizeHandle.addEventListener("pointerdown", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const startX = event.clientX;
+    const startY = event.clientY;
+    const startWidth = panel.offsetWidth;
+    const startHeight = panel.offsetHeight;
+    const startLeft = panel.offsetLeft;
+    const startTop = panel.offsetTop;
+
+    const move = (moveEvent) => {
+      moveEvent.preventDefault();
+      moveEvent.stopPropagation();
+      const margin = 12;
+      const maxWidth = window.innerWidth - startLeft - margin;
+      const maxHeight = window.innerHeight - startTop - margin;
+      panel.style.width = `${clamp(startWidth + moveEvent.clientX - startX, 260, maxWidth)}px`;
+      panel.style.height = `${clamp(startHeight + moveEvent.clientY - startY, 240, maxHeight)}px`;
+    };
+
+    const stop = () => {
+      document.removeEventListener("pointermove", move, true);
+      document.removeEventListener("pointerup", stop, true);
+      document.removeEventListener("pointercancel", stop, true);
+      saveCurrentPanelLayout();
+    };
+
+    document.addEventListener("pointermove", move, true);
+    document.addEventListener("pointerup", stop, true);
+    document.addEventListener("pointercancel", stop, true);
   });
 }
 

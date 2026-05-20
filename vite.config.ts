@@ -4,9 +4,42 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 
-const dataDir = path.resolve(process.cwd(), ".gallery-data");
+const projectRoot = path.resolve(process.env.INIT_CWD || process.cwd());
+const dataDir = path.join(projectRoot, ".gallery-data");
 const imageDir = path.join(dataDir, "images");
 const galleryFile = path.join(dataDir, "gallery.json");
+
+const defaultRoomConfig = {
+  width: 18,
+  depth: 22,
+  height: 5.2,
+  roomCount: 1,
+  rooms: [{ width: 18, depth: 22, height: 5.2 }],
+};
+
+const defaultEditorSettings = {
+  shortcuts: {
+    openMarket: "KeyB",
+    toggleView: "KeyV",
+    moveTool: "KeyG",
+    rotateTool: "KeyR",
+    scaleTool: "KeyS",
+    nudgeLeft: "KeyJ",
+    nudgeRight: "KeyL",
+    nudgeForward: "KeyI",
+    nudgeBackward: "KeyK",
+    rotateLeft: "KeyQ",
+    rotateRight: "KeyE",
+    scaleUp: "Equal",
+    scaleDown: "Minus",
+    grabSelection: "KeyF",
+    deleteSelection: "Delete",
+  },
+  mouseSensitivity: 0.0024,
+  walkSpeed: 4.2,
+  sprintSpeed: 7.1,
+  jumpPower: 5.4,
+};
 
 function sendJson(response: ServerResponse, status: number, body: unknown) {
   response.statusCode = status;
@@ -38,6 +71,37 @@ function safeImageExtension(mimeType: string) {
     return "gif";
   }
   return "jpg";
+}
+
+function listValue(value: unknown) {
+  if (Array.isArray(value)) {
+    return value;
+  }
+
+  if (value && typeof value === "object") {
+    return [value];
+  }
+
+  return [];
+}
+
+function objectValue<T extends object>(value: unknown, fallback: T): T {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as T)
+    : fallback;
+}
+
+function normalizeGalleryState(value: unknown) {
+  const state = objectValue<Record<string, unknown>>(value, {});
+
+  return {
+    images: listValue(state.images),
+    layouts: objectValue(state.layouts, {}),
+    roomConfig: objectValue(state.roomConfig, defaultRoomConfig),
+    customWalls: listValue(state.customWalls),
+    doors: listValue(state.doors),
+    editorSettings: objectValue(state.editorSettings, defaultEditorSettings),
+  };
 }
 
 function localGalleryPersistencePlugin(): Plugin {
@@ -72,10 +136,23 @@ function localGalleryPersistencePlugin(): Plugin {
           return;
         }
 
+        if (url.pathname === "/api/local-gallery/debug" && request.method === "GET") {
+          sendJson(response, 200, {
+            projectRoot,
+            dataDir,
+            galleryFile,
+            exists: await fs.stat(galleryFile).then(() => true).catch(() => false),
+          });
+          return;
+        }
+
         if (url.pathname === "/api/local-gallery" && request.method === "GET") {
           try {
             const raw = await fs.readFile(galleryFile, "utf8");
-            sendJson(response, 200, { exists: true, state: JSON.parse(raw) });
+            sendJson(response, 200, {
+              exists: true,
+              state: normalizeGalleryState(JSON.parse(raw.replace(/^\uFEFF/, ""))),
+            });
           } catch {
             sendJson(response, 200, { exists: false, state: null });
           }
@@ -86,7 +163,7 @@ function localGalleryPersistencePlugin(): Plugin {
           try {
             await fs.mkdir(dataDir, { recursive: true });
             const body = await readBody(request);
-            const state = JSON.parse(body);
+            const state = normalizeGalleryState(JSON.parse(body));
             await fs.writeFile(galleryFile, `${JSON.stringify(state, null, 2)}\n`, "utf8");
             sendJson(response, 200, { ok: true });
           } catch (error) {
