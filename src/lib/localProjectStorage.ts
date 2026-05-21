@@ -102,3 +102,15 @@ export async function saveLocalGalleryImage(file: Blob, id: string) {
 
   return response?.url ?? null;
 }
+
+export async function syncComfyGalleryImageDelete(id: string) {
+  const response = await requestJson<{ ok: boolean }>("/api/comfyui-gallery/image", {
+    method: "DELETE",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ id }),
+  });
+
+  return Boolean(response?.ok);
+}

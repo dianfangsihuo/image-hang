@@ -45,6 +45,7 @@ import {
 import {
   loadLocalGalleryState,
   saveLocalGalleryState,
+  syncComfyGalleryImageDelete,
   type LocalGalleryState,
 } from "./lib/localProjectStorage";
 import { createSampleImages } from "./lib/sampleArt";
@@ -851,18 +852,23 @@ function App() {
     }
   }
 
-  async function removeImage(id: string) {
+  async function removeImage(id: string, options: { syncComfy?: boolean } = { syncComfy: true }) {
     const image = images.find((item) => item.id === id);
     setImages((current) => current.filter((item) => item.id !== id));
     if (image) {
       revokeImageUrl(image);
     }
     await removeStoredImage(id);
+    setPendingPlacementIds((current) => current.filter((item) => item !== id));
     setLayouts((current) => {
       const next = { ...current };
       delete next[id];
       return next;
     });
+
+    if (options.syncComfy ?? true) {
+      void syncComfyGalleryImageDelete(id);
+    }
   }
 
   async function saveProjectNow() {
@@ -2739,7 +2745,10 @@ function App() {
                 <button
                   type="button"
                   className="delete-button"
-                  onClick={() => void removeImage(image.id)}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void removeImage(image.id);
+                  }}
                   title="移除"
                 >
                   <Trash2 size={16} />

@@ -8,6 +8,8 @@ const projectRoot = path.resolve(process.env.INIT_CWD || process.cwd());
 const dataDir = path.join(projectRoot, ".gallery-data");
 const imageDir = path.join(dataDir, "images");
 const galleryFile = path.join(dataDir, "gallery.json");
+const comfyStateFile = process.env.IMAGE_HANG_COMFY_STATE_FILE || "";
+const comfyImageDir = process.env.IMAGE_HANG_COMFY_IMAGE_DIR || "";
 
 const defaultRoomConfig = {
   width: 18,
@@ -104,6 +106,29 @@ function normalizeGalleryState(value: unknown) {
   };
 }
 
+async function deleteComfyGalleryImage(id: string) {
+  if (!comfyStateFile) {
+    return { ok: true, synced: false };
+  }
+
+  const raw = await fs.readFile(comfyStateFile, "utf8");
+  const state = objectValue<Record<string, unknown>>(JSON.parse(raw.replace(/^\uFEFF/, "")), {});
+  const images = listValue(state.images) as Array<Record<string, unknown>>;
+  const removed = images.find((image) => image.id === id);
+  state.images = images.filter((image) => image.id !== id);
+
+  await fs.writeFile(comfyStateFile, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+
+  if (removed && comfyImageDir) {
+    const filename = typeof removed.filename === "string" ? path.basename(removed.filename) : "";
+    if (filename) {
+      await fs.rm(path.join(comfyImageDir, filename), { force: true }).catch(() => undefined);
+    }
+  }
+
+  return { ok: true, synced: true, removed: Boolean(removed) };
+}
+
 function localGalleryPersistencePlugin(): Plugin {
   return {
     name: "local-gallery-persistence",
@@ -141,6 +166,8 @@ function localGalleryPersistencePlugin(): Plugin {
             projectRoot,
             dataDir,
             galleryFile,
+            comfyStateFile,
+            comfyImageDir,
             exists: await fs.stat(galleryFile).then(() => true).catch(() => false),
           });
           return;
@@ -192,6 +219,26 @@ function localGalleryPersistencePlugin(): Plugin {
           } catch (error) {
             sendJson(response, 500, {
               error: error instanceof Error ? error.message : "Failed to save image",
+            });
+          }
+          return;
+        }
+
+        if (url.pathname === "/api/comfyui-gallery/image" && request.method === "DELETE") {
+          try {
+            const body = await readBody(request);
+            const payload = JSON.parse(body) as { id?: string };
+
+            if (!payload.id) {
+              sendJson(response, 400, { ok: false, error: "Missing image id" });
+              return;
+            }
+
+            sendJson(response, 200, await deleteComfyGalleryImage(payload.id));
+          } catch (error) {
+            sendJson(response, 500, {
+              ok: false,
+              error: error instanceof Error ? error.message : "Failed to sync ComfyUI gallery",
             });
           }
           return;

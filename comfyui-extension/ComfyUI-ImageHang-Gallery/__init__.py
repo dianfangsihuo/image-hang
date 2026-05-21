@@ -34,6 +34,7 @@ DEFAULT_SETTINGS = {
     "autoStore": False,
     "openOnStart": True,
     "dedupeGenerated": True,
+    "targetRoomIndex": 0,
 }
 
 DEFAULT_ROOM_CONFIG = {
@@ -392,6 +393,129 @@ def _project_root() -> Path | None:
     return None
 
 
+def _project_gallery_file(project_root: Path) -> Path:
+    return project_root / ".gallery-data" / "gallery.json"
+
+
+def _load_project_gallery_state(project_root: Path) -> dict[str, Any]:
+    gallery_file = _project_gallery_file(project_root)
+    if not gallery_file.is_file():
+        return {}
+
+    try:
+        with gallery_file.open("r", encoding="utf-8") as file:
+            loaded = json.load(file)
+            return loaded if isinstance(loaded, dict) else {}
+    except Exception:
+        return {}
+
+
+def _project_room_config(project_root: Path | None) -> dict[str, Any]:
+    if project_root is None:
+        return DEFAULT_ROOM_CONFIG
+
+    return _dict_value(_load_project_gallery_state(project_root).get("roomConfig"), DEFAULT_ROOM_CONFIG)
+
+
+def _room_count(room_config: dict[str, Any]) -> int:
+    try:
+        return max(1, int(room_config.get("roomCount", 1)))
+    except Exception:
+        return 1
+
+
+def _built_wall_target(room_index: int, wall: str) -> str:
+    return wall if room_index <= 0 else f"room-{room_index}:{wall}"
+
+
+def _default_frame_layout(image: dict[str, Any], room_config: dict[str, Any], room_index: int) -> dict[str, Any]:
+    safe_room_index = max(0, min(room_index, _room_count(room_config) - 1))
+    width = float(image.get("width") or 1200)
+    height = max(1.0, float(image.get("height") or 840))
+    frame_width = min(3.4, max(2.15, (width / height) * 2.15))
+
+    return {
+        "wall": _built_wall_target(safe_room_index, "north"),
+        "offset": 0,
+        "height": 2.4,
+        "width": frame_width,
+    }
+
+
+def _remove_project_gallery_image(image_id: str) -> None:
+    project_root = _project_root()
+    if project_root is None:
+        return
+
+    gallery_file = _project_gallery_file(project_root)
+    state = _load_project_gallery_state(project_root)
+    if not state:
+        return
+
+    images = _list_value(state.get("images"))
+    removed = next((image for image in images if image.get("id") == image_id), None)
+    state["images"] = [image for image in images if image.get("id") != image_id]
+
+    layouts = _dict_value(state.get("layouts"), {})
+    layouts.pop(image_id, None)
+    state["layouts"] = layouts
+
+    if removed:
+        url = removed.get("url")
+        if isinstance(url, str) and url.startswith("/gallery-data/images/"):
+            filename = os.path.basename(url)
+            try:
+                (project_root / ".gallery-data" / "images" / filename).unlink(missing_ok=True)
+            except Exception:
+                pass
+
+    try:
+        with gallery_file.open("w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+    except Exception:
+        pass
+
+
+def _update_project_gallery_image_room(image_id: str, target_room_index: int) -> None:
+    project_root = _project_root()
+    if project_root is None:
+        return
+
+    gallery_file = _project_gallery_file(project_root)
+    state = _load_project_gallery_state(project_root)
+    if not state:
+        return
+
+    room_config = _dict_value(state.get("roomConfig"), DEFAULT_ROOM_CONFIG)
+    safe_room_index = max(0, min(target_room_index, _room_count(room_config) - 1))
+    images = _list_value(state.get("images"))
+    target_image = None
+
+    for image in images:
+        if image.get("id") == image_id:
+            image["targetRoomIndex"] = safe_room_index
+            origin = image.get("origin") if isinstance(image.get("origin"), dict) else {}
+            origin["targetRoomIndex"] = safe_room_index
+            image["origin"] = origin
+            target_image = image
+            break
+
+    if target_image is None:
+        return
+
+    layouts = _dict_value(state.get("layouts"), {})
+    layouts[image_id] = _default_frame_layout(target_image, room_config, safe_room_index)
+    state["layouts"] = layouts
+
+    try:
+        with gallery_file.open("w", encoding="utf-8") as file:
+            json.dump(state, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+    except Exception:
+        pass
+
+
 def _is_port_free(port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.settimeout(0.2)
@@ -432,15 +556,9 @@ def _copy_state_to_project(project_root: Path) -> None:
     local_gallery_file = local_data_dir / "gallery.json"
     local_image_dir.mkdir(parents=True, exist_ok=True)
 
-    existing: dict[str, Any] = {}
-    if local_gallery_file.is_file():
-        try:
-            with local_gallery_file.open("r", encoding="utf-8") as file:
-                loaded = json.load(file)
-                if isinstance(loaded, dict):
-                    existing = loaded
-        except Exception:
-            existing = {}
+    existing = _load_project_gallery_state(project_root)
+    room_config = _dict_value(existing.get("roomConfig"), DEFAULT_ROOM_CONFIG)
+    layouts = _dict_value(existing.get("layouts"), {}).copy()
 
     images = []
     for image in state.get("images", []):
@@ -451,22 +569,27 @@ def _copy_state_to_project(project_root: Path) -> None:
 
         target = local_image_dir / filename
         shutil.copy2(source, target)
-        images.append(
-            {
-                "id": image.get("id") or str(uuid.uuid4()),
-                "name": image.get("name") or filename,
-                "url": f"/gallery-data/images/{filename}",
-                "width": image.get("width") or 1024,
-                "height": image.get("height") or 768,
-                "createdAt": image.get("createdAt") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "source": "local",
-            }
-        )
+        origin = image.get("origin") if isinstance(image.get("origin"), dict) else {}
+        target_room_index = int(image.get("targetRoomIndex") or origin.get("targetRoomIndex") or 0)
+        local_image = {
+            "id": image.get("id") or str(uuid.uuid4()),
+            "name": image.get("name") or filename,
+            "url": f"/gallery-data/images/{filename}",
+            "width": image.get("width") or 1024,
+            "height": image.get("height") or 768,
+            "createdAt": image.get("createdAt") or time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "source": "local",
+            "targetRoomIndex": target_room_index,
+            "origin": origin,
+        }
+        if local_image["id"] not in layouts:
+            layouts[local_image["id"]] = _default_frame_layout(local_image, room_config, target_room_index)
+        images.append(local_image)
 
     local_state = {
         "images": images,
-        "layouts": _dict_value(existing.get("layouts"), {}),
-        "roomConfig": _dict_value(existing.get("roomConfig"), DEFAULT_ROOM_CONFIG),
+        "layouts": layouts,
+        "roomConfig": room_config,
         "customWalls": _list_value(existing.get("customWalls")),
         "doors": _list_value(existing.get("doors")),
         "editorSettings": _dict_value(existing.get("editorSettings"), DEFAULT_EDITOR_SETTINGS),
@@ -494,11 +617,17 @@ def _start_viewer_service(project_root: Path) -> str:
         subprocess.run([npm, "install"], cwd=project_root, check=True)
 
     port = _find_viewer_port()
+    env = {
+        **os.environ,
+        "IMAGE_HANG_COMFY_STATE_FILE": str(STATE_FILE),
+        "IMAGE_HANG_COMFY_IMAGE_DIR": str(IMAGE_DIR),
+    }
     VIEWER_PROCESS = subprocess.Popen(
         [npm, "run", "dev", "--", "--port", str(port), "--host", "127.0.0.1"],
         cwd=project_root,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
+        env=env,
         creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
     )
     VIEWER_PORT = port
@@ -604,11 +733,13 @@ def _fingerprint(image: dict[str, Any]) -> str:
 @PromptServer.instance.routes.get("/image-hang-gallery/state")
 async def get_state(request: web.Request) -> web.Response:
     state = _load_state()
+    project_root = _project_root()
     return _json_response(
         {
             "ok": True,
             "state": state,
             "dataDir": str(DATA_DIR),
+            "roomConfig": _project_room_config(project_root),
         }
     )
 
@@ -673,6 +804,7 @@ async def update_settings(request: web.Request) -> web.Response:
 async def import_generated(request: web.Request) -> web.Response:
     body = await request.json()
     images = body.get("images", []) if isinstance(body, dict) else []
+    target_room_index = int(body.get("targetRoomIndex", 0)) if isinstance(body, dict) else 0
     state = _load_state()
     settings = state.get("settings", DEFAULT_SETTINGS)
     existing = {
@@ -706,8 +838,10 @@ async def import_generated(request: web.Request) -> web.Response:
                 "filename": image.get("filename"),
                 "subfolder": image.get("subfolder", ""),
                 "type": image.get("type", "output"),
+                "targetRoomIndex": target_room_index,
             },
         )
+        record["targetRoomIndex"] = target_room_index
         state["images"].insert(0, record)
         existing.add(fingerprint)
         imported.append(record)
@@ -740,8 +874,37 @@ async def delete_image(request: web.Request) -> web.Response:
             except Exception:
                 pass
         _save_state(state)
+        _remove_project_gallery_image(image_id)
 
     return _json_response({"ok": True, "removed": bool(removed)})
+
+
+@PromptServer.instance.routes.post("/image-hang-gallery/image/{image_id}/room")
+async def update_image_room(request: web.Request) -> web.Response:
+    image_id = request.match_info["image_id"]
+    body = await request.json()
+    target_room_index = int(body.get("targetRoomIndex", 0)) if isinstance(body, dict) else 0
+    project_root = _project_root()
+    room_config = _project_room_config(project_root)
+    safe_room_index = max(0, min(target_room_index, _room_count(room_config) - 1))
+    state = _load_state()
+    updated = False
+
+    for image in state.get("images", []):
+        if image.get("id") != image_id:
+            continue
+        image["targetRoomIndex"] = safe_room_index
+        origin = image.get("origin") if isinstance(image.get("origin"), dict) else {}
+        origin["targetRoomIndex"] = safe_room_index
+        image["origin"] = origin
+        updated = True
+        break
+
+    if updated:
+        _save_state(state)
+        _update_project_gallery_image_room(image_id, safe_room_index)
+
+    return _json_response({"ok": True, "updated": updated, "targetRoomIndex": safe_room_index})
 
 
 @PromptServer.instance.routes.get("/image-hang-gallery/image/{filename}")

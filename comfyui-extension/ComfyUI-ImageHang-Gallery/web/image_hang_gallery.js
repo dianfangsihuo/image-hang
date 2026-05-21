@@ -10,6 +10,7 @@ let grid;
 let statusLine;
 let autoStoreToggle;
 let openOnStartToggle;
+let targetRoomSelect;
 const layoutStorageKey = "image-hang-gallery-panel-layout";
 const defaultPanelLayout = {
   width: 380,
@@ -21,7 +22,9 @@ let settings = {
   autoStore: false,
   openOnStart: true,
   dedupeGenerated: true,
+  targetRoomIndex: 0,
 };
+let currentRoomCount = 1;
 let knownFingerprints = new Set();
 
 function clamp(value, min, max) {
@@ -221,6 +224,16 @@ function injectStyle() {
       cursor: pointer;
     }
 
+    .image-hang-room-select {
+      width: 100%;
+      border: 1px solid rgba(255,255,255,.14);
+      border-radius: 6px;
+      padding: 7px 9px;
+      color: #f7f0e3;
+      background: rgba(10, 8, 6, .58);
+      font: 700 13px/1.2 system-ui, sans-serif;
+    }
+
     .image-hang-status {
       color: #d5c7b5;
       font-size: 12px;
@@ -237,6 +250,7 @@ function injectStyle() {
     }
 
     .image-hang-card {
+      position: relative;
       border: 1px solid rgba(255,255,255,.11);
       border-radius: 8px;
       overflow: hidden;
@@ -260,6 +274,24 @@ function injectStyle() {
       font-size: 12px;
     }
 
+    .image-hang-card-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 0 8px 8px;
+    }
+
+    .image-hang-card select {
+      min-width: 0;
+      flex: 1;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 5px;
+      padding: 5px 7px;
+      color: #f7f0e3;
+      background: rgba(10, 8, 6, .58);
+      font: 700 12px/1.2 system-ui, sans-serif;
+    }
+
     .image-hang-card span {
       min-width: 0;
       overflow: hidden;
@@ -267,13 +299,26 @@ function injectStyle() {
       white-space: nowrap;
     }
 
-    .image-hang-card button {
+    .image-hang-delete {
+      position: absolute;
+      right: 7px;
+      top: 7px;
+      display: grid;
+      place-items: center;
+      width: 22px;
+      height: 22px;
       border: 0;
-      border-radius: 5px;
-      padding: 4px 6px;
-      color: #f5d6d0;
-      background: rgba(143,48,38,.42);
+      border-radius: 999px;
+      padding: 0;
+      color: #fff2ee;
+      background: rgba(143,48,38,.86);
+      box-shadow: 0 6px 16px rgba(0,0,0,.36);
+      font: 900 16px/1 system-ui, sans-serif;
       cursor: pointer;
+    }
+
+    .image-hang-delete:hover {
+      background: rgba(178,50,38,.96);
     }
 
     .image-hang-resize {
@@ -322,6 +367,9 @@ function makePanel() {
     <div class="image-hang-row">
       <label><input type="checkbox" data-setting="openOnStart"> 启动后自动弹出</label>
     </div>
+    <div class="image-hang-row">
+      <select class="image-hang-room-select" data-setting="targetRoomIndex" title="自动收集图片时指定挂到哪个房间"></select>
+    </div>
     <div class="image-hang-status"></div>
     <div class="image-hang-grid"></div>
     <button type="button" class="image-hang-resize" aria-label="调整画廊大小" title="拖动调整大小"></button>
@@ -333,6 +381,7 @@ function makePanel() {
   statusLine = panel.querySelector(".image-hang-status");
   autoStoreToggle = panel.querySelector('[data-setting="autoStore"]');
   openOnStartToggle = panel.querySelector('[data-setting="openOnStart"]');
+  targetRoomSelect = panel.querySelector('[data-setting="targetRoomIndex"]');
 
   panel.querySelector('[data-action="refresh"]').addEventListener("click", () => {
     void loadGallery();
@@ -384,11 +433,53 @@ function makePanel() {
     void saveSettings();
   });
 
+  targetRoomSelect.addEventListener("change", () => {
+    settings.targetRoomIndex = Number(targetRoomSelect.value) || 0;
+    void saveSettings();
+  });
+
   enablePanelDragAndResize();
   window.addEventListener("resize", () => {
     applyPanelLayout(readPanelLayout());
     saveCurrentPanelLayout();
   });
+}
+
+function updateRoomOptions(roomConfig) {
+  if (!targetRoomSelect) {
+    return;
+  }
+
+  const roomCount = Math.max(1, Number(roomConfig?.roomCount) || 1);
+  currentRoomCount = roomCount;
+  const selected = clamp(Number(settings.targetRoomIndex) || 0, 0, roomCount - 1);
+  targetRoomSelect.innerHTML = "";
+
+  for (let index = 0; index < roomCount; index += 1) {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `自动挂到：房间 ${index + 1}`;
+    targetRoomSelect.appendChild(option);
+  }
+
+  targetRoomSelect.value = String(selected);
+  settings.targetRoomIndex = selected;
+}
+
+function makeRoomSelect(selectedRoomIndex, onChange) {
+  const select = document.createElement("select");
+  const selected = clamp(Number(selectedRoomIndex) || 0, 0, currentRoomCount - 1);
+
+  for (let index = 0; index < currentRoomCount; index += 1) {
+    const option = document.createElement("option");
+    option.value = String(index);
+    option.textContent = `房间 ${index + 1}`;
+    select.appendChild(option);
+  }
+
+  select.value = String(selected);
+  select.addEventListener("change", () => onChange(Number(select.value) || 0));
+  return select;
 }
 
 function enablePanelDragAndResize() {
@@ -483,16 +574,43 @@ function renderImages(images) {
     card.className = "image-hang-card";
     card.innerHTML = `
       <img src="${image.url}" loading="lazy" alt="">
+      <button type="button" class="image-hang-delete" title="从画廊删除" aria-label="删除画作">×</button>
       <footer>
         <span title="${image.name || ""}">${image.name || "Untitled"}</span>
-        <button type="button">删除</button>
       </footer>
+      <div class="image-hang-card-controls"></div>
     `;
-    card.querySelector("button").addEventListener("click", async () => {
-      await fetchJson(`/image-hang-gallery/image/${encodeURIComponent(image.id)}`, {
-        method: "DELETE",
-      });
-      await loadGallery();
+    card.querySelector(".image-hang-card-controls").appendChild(
+      makeRoomSelect(image.targetRoomIndex ?? image.origin?.targetRoomIndex ?? 0, async (targetRoomIndex) => {
+        try {
+          await fetchJson(`/image-hang-gallery/image/${encodeURIComponent(image.id)}/room`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ targetRoomIndex }),
+          });
+          await loadGallery();
+          setStatus(`已指定到房间 ${targetRoomIndex + 1}`);
+        } catch (error) {
+          setStatus(`指定房间失败：${error.message || error}`);
+        }
+      }),
+    );
+    card.querySelector(".image-hang-delete").addEventListener("click", async (event) => {
+      event.stopPropagation();
+      const confirmed = window.confirm(`删除这张画作？\n${image.name || "Untitled"}`);
+      if (!confirmed) {
+        return;
+      }
+
+      try {
+        await fetchJson(`/image-hang-gallery/image/${encodeURIComponent(image.id)}`, {
+          method: "DELETE",
+        });
+        await loadGallery();
+        setStatus("已删除画作");
+      } catch (error) {
+        setStatus(`删除失败：${error.message || error}`);
+      }
     });
     grid.appendChild(card);
   }
@@ -507,6 +625,7 @@ async function loadGallery() {
     };
     autoStoreToggle.checked = Boolean(settings.autoStore);
     openOnStartToggle.checked = Boolean(settings.openOnStart);
+    updateRoomOptions(data.roomConfig);
     renderImages(data.state?.images || []);
     setStatus(`保存目录：${data.dataDir || "ComfyUI/user/image_hang_gallery"}`);
   } catch (error) {
@@ -544,7 +663,7 @@ async function importGeneratedImages(images) {
     const result = await fetchJson(importUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ images: fresh }),
+      body: JSON.stringify({ images: fresh, targetRoomIndex: Number(settings.targetRoomIndex) || 0 }),
     });
     if (result.imported?.length) {
       panel.classList.add("open");

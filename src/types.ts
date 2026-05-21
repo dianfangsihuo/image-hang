@@ -29,6 +29,15 @@ export interface GalleryImage {
   height: number;
   createdAt: string;
   source: GalleryImageSource;
+  targetRoomIndex?: number;
+  origin?: {
+    kind?: string;
+    fingerprint?: string;
+    filename?: string;
+    subfolder?: string;
+    type?: string;
+    targetRoomIndex?: number;
+  };
 }
 
 export interface UploadResult {
