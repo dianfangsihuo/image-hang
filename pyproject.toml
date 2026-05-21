@@ -1,0 +1,20 @@
+[project]
+name = "comfyui-image-hang-gallery"
+description = "A ComfyUI extension that collects generated images and opens them in a customizable local 3D gallery."
+version = "0.1.0"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+dependencies = [
+  "Pillow",
+]
+
+[project.urls]
+Repository = "https://github.com/dianfangsihuo/ComfyUI-ImageHang-Gallery"
+Issues = "https://github.com/dianfangsihuo/ComfyUI-ImageHang-Gallery/issues"
+
+[tool.comfy]
+PublisherId = "dianfangsihuo"
+DisplayName = "ComfyUI Image Hang Gallery"
+Icon = "https://raw.githubusercontent.com/dianfangsihuo/ComfyUI-ImageHang-Gallery/main/docs/images/image-hang-gallery-demo.png"
+Banner = "https://raw.githubusercontent.com/dianfangsihuo/ComfyUI-ImageHang-Gallery/main/docs/images/showcase-view-mode.png"
