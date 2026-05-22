@@ -1,17 +1,20 @@
-# Changelog
+# 更新日志
 
 ## v0.2.0
 
-- Added ComfyUI panel pagination so large galleries no longer crowd the ComfyUI workspace.
-- Added per-room auto-placement for generated images, including fallback to other rooms when the selected room is full.
-- Added full-gallery capacity handling with a clear ComfyUI panel message when every room is full.
-- Added room targeting in the ComfyUI panel for newly collected generated images.
-- Added room labels, room filtering, drag-to-room movement, and direct room selection in the 3D gallery artwork list.
-- Improved gallery deletion so removing artwork from the 3D gallery also syncs back to the ComfyUI gallery store.
-- Improved room/layout synchronization between the ComfyUI extension and the local 3D gallery data.
-- Added Comfy Registry publish workflow and package ignore rules.
-- Removed local-only agent instructions from the repository.
+- ComfyUI 面板新增分页，图片很多时不会再把操作区挤满。
+- 自动收集生成图时支持选择目标房间。
+- 目标房间挂满后，会自动尝试挂到其他房间。
+- 所有房间都挂满时，会在 ComfyUI 面板里明确提示，不再硬塞导致重叠。
+- 3D 画廊作品列表会显示每张画所在房间。
+- 作品列表支持按房间筛选：全部 / 房间 1 / 房间 2 / 房间 3。
+- 支持把画作卡片拖到房间按钮上，直接移动到对应房间。
+- 每张作品卡片也可以用房间下拉框直接换房间。
+- 删除画作会同步回 ComfyUI 收集数据。
+- 改进 ComfyUI 扩展和本地 3D 画廊之间的房间、布局同步。
+- 新增 Comfy Registry 自动发布 workflow 和 `.comfyignore` 打包规则。
+- 移除仓库里的本地协作提示文件。
 
 ## v0.1.0
 
-- Initial ComfyUI Image Hang Gallery release.
+- 首个公开版本。
