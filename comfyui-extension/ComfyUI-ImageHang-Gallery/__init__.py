@@ -483,7 +483,9 @@ def _auto_frame_layout(
     room_config: dict[str, Any],
     room_index: int,
     occupied: list[tuple[dict[str, Any], dict[str, Any]]] | None = None,
-) -> dict[str, Any]:
+    *,
+    allow_fallback: bool = True,
+) -> dict[str, Any] | None:
     safe_room_index = max(0, min(room_index, _room_count(room_config) - 1))
     width = float(image.get("width") or 1200)
     height = max(1.0, float(image.get("height") or 840))
@@ -522,12 +524,44 @@ def _auto_frame_layout(
         if not any(_layout_overlaps(candidate, layout, image, other) for layout, other in occupied):
             return candidate
 
+    if not allow_fallback:
+        return None
+
     return {
         "wall": _built_wall_target(safe_room_index, "north"),
         "offset": 0,
         "height": min(max(room_height * 0.48, 2.2), max(2.2, room_height - 1.15)),
         "width": frame_width,
     }
+
+
+def _find_available_auto_layout(
+    image: dict[str, Any],
+    room_config: dict[str, Any],
+    preferred_room_index: int,
+    occupied: list[tuple[dict[str, Any], dict[str, Any]]],
+) -> tuple[int | None, dict[str, Any] | None]:
+    room_count = _room_count(room_config)
+    safe_preferred = max(0, min(preferred_room_index, room_count - 1))
+    room_order = list(range(safe_preferred, room_count)) + list(range(0, safe_preferred))
+
+    for room_index in room_order:
+        room_occupied = [
+            (layout, other)
+            for layout, other in occupied
+            if _wall_room_index(layout.get("wall")) == room_index
+        ]
+        layout = _auto_frame_layout(
+            image,
+            room_config,
+            room_index,
+            room_occupied,
+            allow_fallback=False,
+        )
+        if layout is not None:
+            return room_index, layout
+
+    return None, None
 
 
 def _remove_project_gallery_image(image_id: str) -> None:
@@ -685,9 +719,17 @@ def _copy_state_to_project(project_root: Path) -> None:
             "origin": origin,
         }
         if local_image["id"] not in layouts:
-            layout = _auto_frame_layout(local_image, room_config, target_room_index, occupied_layouts)
-            layouts[local_image["id"]] = layout
-            occupied_layouts.append((layout, local_image))
+            assigned_room_index, layout = _find_available_auto_layout(
+                local_image,
+                room_config,
+                target_room_index,
+                occupied_layouts,
+            )
+            if layout is not None and assigned_room_index is not None:
+                local_image["targetRoomIndex"] = assigned_room_index
+                local_image["origin"]["targetRoomIndex"] = assigned_room_index
+                layouts[local_image["id"]] = layout
+                occupied_layouts.append((layout, local_image))
         images.append(local_image)
 
     local_state = {
@@ -918,6 +960,30 @@ async def import_generated(request: web.Request) -> web.Response:
     }
     imported: list[dict[str, Any]] = []
     skipped = 0
+    full = 0
+    project_root = _project_root()
+    project_state = _load_project_gallery_state(project_root) if project_root else {}
+    room_config = _dict_value(project_state.get("roomConfig"), _dict_value(state.get("roomConfig"), DEFAULT_ROOM_CONFIG))
+    project_layouts = _dict_value(project_state.get("layouts"), {})
+    occupied_layouts = [
+        (layout, image)
+        for image in _list_value(project_state.get("images"))
+        for layout in [project_layouts.get(image.get("id"))]
+        if isinstance(layout, dict)
+    ]
+    for stored_image in _list_value(state.get("images")):
+        if stored_image.get("id") in project_layouts:
+            continue
+        stored_origin = stored_image.get("origin") if isinstance(stored_image.get("origin"), dict) else {}
+        stored_room_index = int(stored_image.get("targetRoomIndex") or stored_origin.get("targetRoomIndex") or 0)
+        _, stored_layout = _find_available_auto_layout(
+            stored_image,
+            room_config,
+            stored_room_index,
+            occupied_layouts,
+        )
+        if stored_layout is not None:
+            occupied_layouts.append((stored_layout, stored_image))
 
     for image in images:
         if not isinstance(image, dict):
@@ -933,6 +999,21 @@ async def import_generated(request: web.Request) -> web.Response:
             skipped += 1
             continue
 
+        width, height = _image_size(source)
+        preview = {
+            "width": width,
+            "height": height,
+        }
+        assigned_room_index, layout = _find_available_auto_layout(
+            preview,
+            room_config,
+            target_room_index,
+            occupied_layouts,
+        )
+        if assigned_room_index is None or layout is None:
+            full += 1
+            continue
+
         record = _record_for_file(
             source,
             original_name=image.get("filename"),
@@ -942,18 +1023,27 @@ async def import_generated(request: web.Request) -> web.Response:
                 "filename": image.get("filename"),
                 "subfolder": image.get("subfolder", ""),
                 "type": image.get("type", "output"),
-                "targetRoomIndex": target_room_index,
+                "targetRoomIndex": assigned_room_index,
             },
         )
-        record["targetRoomIndex"] = target_room_index
+        record["targetRoomIndex"] = assigned_room_index
         state["images"].insert(0, record)
+        occupied_layouts.append((layout, record))
         existing.add(fingerprint)
         imported.append(record)
 
     if imported:
         _save_state(state)
 
-    return _json_response({"ok": True, "imported": imported, "skipped": skipped})
+    return _json_response(
+        {
+            "ok": True,
+            "imported": imported,
+            "skipped": skipped,
+            "full": full,
+            "message": "所有房间都已挂满，新的生成图没有自动加入画廊" if full else "",
+        }
+    )
 
 
 @PromptServer.instance.routes.delete("/image-hang-gallery/image/{image_id}")

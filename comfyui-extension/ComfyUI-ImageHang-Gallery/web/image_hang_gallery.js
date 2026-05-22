@@ -766,7 +766,21 @@ async function importGeneratedImages(images) {
     if (result.imported?.length) {
       panel.classList.add("open");
       await loadGallery();
-      setStatus(`已自动保存 ${result.imported.length} 张生成图`);
+      const assignedRooms = Array.from(
+        new Set(
+          result.imported
+            .map((image) => Number(image.targetRoomIndex))
+            .filter((roomIndex) => Number.isFinite(roomIndex)),
+        ),
+      ).sort((a, b) => a - b);
+      const roomText = assignedRooms.length
+        ? `，挂到房间 ${assignedRooms.map((roomIndex) => roomIndex + 1).join("、")}`
+        : "";
+      const fullText = result.full ? `；${result.full} 张因所有房间已满未加入` : "";
+      setStatus(`已自动保存 ${result.imported.length} 张生成图${roomText}${fullText}`);
+    } else if (result.full) {
+      panel.classList.add("open");
+      setStatus(`所有房间都已挂满，${result.full} 张生成图没有自动加入画廊`);
     }
   } catch (error) {
     setStatus(`自动保存失败：${error.message || error}`);
