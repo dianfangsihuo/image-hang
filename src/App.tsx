@@ -559,6 +559,7 @@ function App() {
   const [isProjectStorageReady, setIsProjectStorageReady] = useState(false);
   const [message, setMessage] = useState("");
   const [dragOverRoomIndex, setDragOverRoomIndex] = useState<number | null>(null);
+  const [collectionRoomFilter, setCollectionRoomFilter] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imagesRef = useRef<GalleryImage[]>([]);
   const hasLoadedLocalProjectRef = useRef(false);
@@ -599,6 +600,9 @@ function App() {
   );
   const remainingCapacity = Math.max(0, capacity - sceneImages.length);
   const supabaseReady = isSupabaseConfigured();
+  const visibleCollectionImages = images.filter(
+    (image) => collectionRoomFilter === null || getImageRoomIndex(image) === collectionRoomFilter,
+  );
 
   function switchMode(nextMode: AppMode) {
     setMode(nextMode);
@@ -917,6 +921,12 @@ function App() {
 
   useEffect(() => {
     setSelectedRoomIndex((current) => clamp(Math.round(current), 0, roomConfig.roomCount - 1));
+  }, [roomConfig.roomCount]);
+
+  useEffect(() => {
+    setCollectionRoomFilter((current) =>
+      current === null || current < roomConfig.roomCount ? current : null,
+    );
   }, [roomConfig.roomCount]);
 
   useEffect(() => {
@@ -2907,16 +2917,38 @@ function App() {
 
         <div className="collection-header">
           <span>作品</span>
-          <span>{images.length || samples.length}</span>
+          <span>
+            {images.length
+              ? collectionRoomFilter === null
+                ? images.length
+                : `${visibleCollectionImages.length} / ${images.length}`
+              : samples.length}
+          </span>
         </div>
 
         <div className="collection-room-targets" aria-label="拖动画作到房间">
+          <button
+            type="button"
+            className={collectionRoomFilter === null ? "active" : ""}
+            onClick={() => setCollectionRoomFilter(null)}
+            title="显示全部作品"
+          >
+            全部
+          </button>
           {Array.from({ length: roomConfig.roomCount }, (_, roomIndex) => (
             <button
               key={roomIndex}
               type="button"
-              className={dragOverRoomIndex === roomIndex ? "drag-over" : ""}
-              onClick={() => setSelectedRoomIndex(roomIndex)}
+              className={[
+                collectionRoomFilter === roomIndex ? "active" : "",
+                dragOverRoomIndex === roomIndex ? "drag-over" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              onClick={() => {
+                setCollectionRoomFilter(roomIndex);
+                setSelectedRoomIndex(roomIndex);
+              }}
               onDragOver={(event) => {
                 event.preventDefault();
                 event.dataTransfer.dropEffect = "move";
@@ -2947,7 +2979,7 @@ function App() {
               </article>
             ))
           ) : (
-            images.map((image) => (
+            visibleCollectionImages.map((image) => (
               <article
                 className={`image-item ${selectedImageId === image.id ? "selected" : ""}`}
                 key={image.id}
@@ -2995,6 +3027,9 @@ function App() {
               </article>
             ))
           )}
+          {images.length > 0 && visibleCollectionImages.length === 0 ? (
+            <p className="empty-collection-room">房间 {collectionRoomFilter! + 1} 还没有作品</p>
+          ) : null}
         </div>
       </aside>
 

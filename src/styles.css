@@ -1135,11 +1135,29 @@ kbd {
   box-shadow: 0 0 0 2px rgba(246, 196, 83, 0.2);
 }
 
+.collection-room-targets button.active {
+  border-color: rgba(51, 43, 36, 0.4);
+  color: #fffaf0;
+  background: #332b24;
+}
+
 .image-list {
   display: flex;
   flex-direction: column;
   gap: 10px;
   min-height: 0;
+}
+
+.empty-collection-room {
+  margin: 0;
+  padding: 12px;
+  border: 1px dashed rgba(75, 62, 48, 0.18);
+  border-radius: 8px;
+  color: #6f624f;
+  background: rgba(255, 255, 255, 0.36);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-align: center;
 }
 
 .image-item {
